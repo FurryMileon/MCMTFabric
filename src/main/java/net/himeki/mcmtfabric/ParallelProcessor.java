@@ -221,13 +221,13 @@ public class ParallelProcessor {
             tickConsumer.accept(entityIn);
             return;
         }
-        if (entityIn instanceof PlayerEntity || entityIn instanceof FallingBlockEntity ) {
+        if (entityIn instanceof PlayerEntity || entityIn instanceof FallingBlockEntity) {
             tickConsumer.accept(entityIn);
             return;
         }
         String taskName = null;
         if (config.opsTracing) {
-            taskName = "EntityTick: " + /*entityIn.toString() + KG: Wayyy too slow. Maybe for debug but needs to be done via flag in that circumstance */ "@" + entityIn.hashCode();
+            taskName = "EntityTick: " + entityIn.toString()/* + KG: Wayyy too slow. Maybe for debug but needs to be done via flag in that circumstance "@" + entityIn.hashCode()*/;
             currentTasks.add(taskName);
         }
         String finalTaskName = taskName;

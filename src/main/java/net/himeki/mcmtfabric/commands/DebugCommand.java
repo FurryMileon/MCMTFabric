@@ -25,10 +25,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
-import java.util.Arrays;
-import java.util.List;
-import java.util.Map;
-import java.util.UUID;
+import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -57,7 +54,7 @@ public class DebugCommand {
                 cmdCtx.getSource().sendFeedback(() -> message, true);
                 return 1;
             }
-            NbtCompound nbt = te.toInitialChunkDataNbt();
+            NbtCompound nbt = te.createNbt(Objects.requireNonNull(te.getWorld()).getRegistryManager());
             String nbtStr = nbt.toString();
             MutableText message = Text.literal("Block at " + bp + " is " + bs.getBlock().getName() + " with TE NBT:");
             cmdCtx.getSource().sendFeedback(() -> message, true);

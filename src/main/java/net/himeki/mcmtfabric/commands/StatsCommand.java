@@ -163,7 +163,7 @@ public class StatsCommand {
                             if (currentSteps % stepsPer == 0) {
                                 float ticktime = -1;
                                 if (mcs != null && mcs.isRunning()) {
-                                    ticktime = mcs.getTickTime();
+                                    ticktime = mcs.getAverageTickTime();
                                 }
                                 float threadCount = mean(maxThreads, liveValues);
                                 long memory = Runtime.getRuntime().maxMemory() - Runtime.getRuntime().freeMemory();

@@ -18,10 +18,10 @@ public abstract class ChunkTicketManagerMixin {
     @Shadow
     @Final
     @Mutable
-    Set<ChunkHolder> chunkHolders = ConcurrentCollections.newHashSet();
+    Set<ChunkHolder> chunkHoldersWithPendingUpdates = ConcurrentCollections.newHashSet();
 
     @Shadow
     @Final
     @Mutable
-    LongSet chunkPositions = new ConcurrentLongLinkedOpenHashSet();
+    LongSet freshPlayerTicketPositions = new ConcurrentLongLinkedOpenHashSet();
 }

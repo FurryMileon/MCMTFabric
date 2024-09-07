@@ -1,14 +1,14 @@
 plugins {
-    id 'fabric-loom' version '1.2-SNAPSHOT'
+    id 'fabric-loom' version '1.7-SNAPSHOT'
     id 'maven-publish'
 }
 
-sourceCompatibility = JavaVersion.VERSION_16
-targetCompatibility = JavaVersion.VERSION_16
-
-archivesBaseName = project.archives_base_name
 version = project.mod_version
 group = project.maven_group
+
+base {
+    archivesName = project.archives_base_name
+}
 
 repositories {
     // Add repositories to retrieve artifacts from in here.
@@ -34,16 +34,16 @@ dependencies {
     // PSA: Some older mods, compiled on Loom 0.2.1, might have outdated Maven POMs.
     // You may need to force-disable transitiveness on them.
 
-    modImplementation "com.terraformersmc:modmenu:7.0.1"
+    modImplementation "com.terraformersmc:modmenu:11.0.1"
     implementation group: 'com.google.code.findbugs', name: 'jsr305', version: '3.0.2'
 
-    modApi("me.shedaniel.cloth:cloth-config-fabric:11.0.99") {
+    modApi("me.shedaniel.cloth:cloth-config-fabric:15.0.130") {
         exclude(group: "net.fabricmc.fabric-api")
     }
-    modImplementation 'com.electronwill.night-config:toml:3.6.6'
+    modImplementation 'com.electronwill.night-config:toml:3.8.1'
 
-    include group: 'com.electronwill.night-config', name: 'toml', version: '3.6.6'
-    include group: 'com.electronwill.night-config', name: 'core', version: '3.6.6'
+    include group: 'com.electronwill.night-config', name: 'toml', version: '3.8.1'
+    include group: 'com.electronwill.night-config', name: 'core', version: '3.8.1'
 }
 
 processResources {
@@ -54,16 +54,8 @@ processResources {
     }
 }
 
-
 tasks.withType(JavaCompile).configureEach {
-    // ensure that the encoding is set to UTF-8, no matter what the system default is
-    // this fixes some edge cases with special characters not displaying correctly
-    // see http://yodaconditions.net/blog/fix-for-java-file-encoding-problems-with-gradle.html
-    // If Javadoc is generated, this must be specified in that task too.
-    it.options.encoding = "UTF-8"
-
-    // Minecraft 1.17 (21w19a) upwards uses Java 16.
-    it.options.release = 16
+    it.options.release = 21
 }
 
 java {
@@ -71,6 +63,9 @@ java {
     // if it is present.
     // If you remove this line, sources will not be generated.
     withSourcesJar()
+
+    sourceCompatibility = JavaVersion.VERSION_21
+    targetCompatibility = JavaVersion.VERSION_21
 }
 
 loom {
@@ -86,7 +81,8 @@ jar {
 // configure the maven publication
 publishing {
     publications {
-        mavenJava(MavenPublication) {
+        create("mavenJava", MavenPublication) {
+            artifactId = project.archives_base_name
             from components.java
         }
     }

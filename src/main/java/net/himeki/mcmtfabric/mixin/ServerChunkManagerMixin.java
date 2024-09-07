@@ -1,15 +1,11 @@
 package net.himeki.mcmtfabric.mixin;
 
-import com.mojang.datafixers.util.Either;
-import net.himeki.mcmtfabric.DebugHookTerminator;
 import net.himeki.mcmtfabric.ParallelProcessor;
-import net.minecraft.server.world.ChunkHolder;
+
 import net.minecraft.server.world.ServerChunkManager;
 import net.minecraft.server.world.ServerWorld;
 import net.minecraft.util.profiler.Profiler;
-import net.minecraft.world.chunk.Chunk;
 import net.minecraft.world.chunk.ChunkManager;
-import net.minecraft.world.chunk.ChunkStatus;
 import net.minecraft.world.chunk.WorldChunk;
 import org.objectweb.asm.Opcodes;
 import org.spongepowered.asm.mixin.Final;
@@ -19,12 +15,6 @@ import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.Redirect;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
-import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
-import org.spongepowered.asm.mixin.injection.callback.LocalCapture;
-
-import java.util.Collections;
-import java.util.List;
-import java.util.concurrent.CompletableFuture;
 
 
 @Mixin(ServerChunkManager.class)
@@ -38,7 +28,7 @@ public abstract class ServerChunkManagerMixin extends ChunkManager {
     @Final
     ServerWorld world;
 
-    @Inject(method = "tickChunks", at = @At(value = "INVOKE", target = "Ljava/util/Collections;shuffle(Ljava/util/List;)V"))
+    @Inject(method = "tickChunks", at = @At(value = "INVOKE", target = "Lnet/minecraft/util/Util;shuffle(Ljava/util/List;Lnet/minecraft/util/math/random/Random;)V"))
     private void preChunkTick(CallbackInfo ci) {
         ParallelProcessor.preChunkTick(this.world);
     }
@@ -61,10 +51,9 @@ public abstract class ServerChunkManagerMixin extends ChunkManager {
         else instance.visit("getChunkCacheMiss");
     }
 
-    @Inject(method = "getChunk(IILnet/minecraft/world/chunk/ChunkStatus;Z)Lnet/minecraft/world/chunk/Chunk;", at = @At(value = "INVOKE", target = "Lnet/minecraft/server/world/ServerChunkManager$MainThreadExecutor;runTasks(Ljava/util/function/BooleanSupplier;)V"), locals = LocalCapture.CAPTURE_FAILHARD)
-    private void callCompletableFutureHook(int x, int z, ChunkStatus leastStatus, boolean create, CallbackInfoReturnable<Chunk> cir, Profiler profiler, long chunkPos, CompletableFuture<Either<Chunk, ChunkHolder.Unloaded>> i) {
-        DebugHookTerminator.chunkLoadDrive(this.mainThreadExecutor, i::isDone, (ServerChunkManager) (Object) this, i, chunkPos);
-
-    }
+//    @Inject(method = "getChunk(IILnet/minecraft/world/chunk/ChunkStatus;Z)Lnet/minecraft/world/chunk/Chunk;", at = @At(value = "INVOKE", target = "Lnet/minecraft/server/world/ServerChunkManager$MainThreadExecutor;runTasks(Ljava/util/function/BooleanSupplier;)V"))
+//    private void callCompletableFutureHook(int x, int z, ChunkStatus leastStatus, boolean create, CallbackInfoReturnable<Chunk> cir, @Local long chunkPos, @Local CompletableFuture<OptionalChunk<Chunk>> completableFuture) {
+//        DebugHookTerminator.chunkLoadDrive(this.mainThreadExecutor, completableFuture::isDone, (ServerChunkManager) (Object) this, completableFuture, chunkPos);
+//    }
 
 }
