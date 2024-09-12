@@ -7,8 +7,13 @@ import net.himeki.mcmtfabric.serdes.SerDesRegistry;
 import net.himeki.mcmtfabric.serdes.filter.ISerDesFilter;
 import net.himeki.mcmtfabric.serdes.pools.PostExecutePool;
 import net.minecraft.block.entity.PistonBlockEntity;
+import net.minecraft.block.entity.SculkCatalystBlockEntity;
+import net.minecraft.block.entity.SculkSensorBlockEntity;
+import net.minecraft.block.entity.SculkShriekerBlockEntity;
 import net.minecraft.entity.Entity;
 import net.minecraft.entity.FallingBlockEntity;
+import net.minecraft.entity.TntEntity;
+import net.minecraft.entity.passive.AllayEntity;
 import net.minecraft.entity.player.PlayerEntity;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.world.ServerWorld;
@@ -221,7 +226,7 @@ public class ParallelProcessor {
             tickConsumer.accept(entityIn);
             return;
         }
-        if (entityIn instanceof PlayerEntity || entityIn instanceof FallingBlockEntity) {
+        if (entityIn instanceof PlayerEntity || entityIn instanceof FallingBlockEntity || entityIn instanceof AllayEntity || entityIn instanceof TntEntity) {
             tickConsumer.accept(entityIn);
             return;
         }
@@ -267,7 +272,9 @@ public class ParallelProcessor {
                 tte.tick();
                 return;
             }
-            if (((WorldChunk.DirectBlockEntityTickInvoker<?>) ((WorldChunk.WrappedBlockEntityTickInvoker) tte).wrapped).blockEntity instanceof PistonBlockEntity) {
+            var blockEntity = ((WorldChunk.DirectBlockEntityTickInvoker<?>) ((WorldChunk.WrappedBlockEntityTickInvoker) tte).wrapped).blockEntity;
+            if (blockEntity instanceof PistonBlockEntity || blockEntity instanceof SculkSensorBlockEntity ||
+                    blockEntity instanceof SculkShriekerBlockEntity || blockEntity instanceof SculkCatalystBlockEntity) {
                 tte.tick();
                 return;
             }

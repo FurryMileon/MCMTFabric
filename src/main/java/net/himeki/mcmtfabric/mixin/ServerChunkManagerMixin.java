@@ -1,11 +1,15 @@
 package net.himeki.mcmtfabric.mixin;
 
+import com.llamalad7.mixinextras.injector.wrapmethod.WrapMethod;
+import com.llamalad7.mixinextras.injector.wrapoperation.Operation;
 import net.himeki.mcmtfabric.ParallelProcessor;
 
 import net.minecraft.server.world.ServerChunkManager;
 import net.minecraft.server.world.ServerWorld;
 import net.minecraft.util.profiler.Profiler;
+import net.minecraft.world.chunk.Chunk;
 import net.minecraft.world.chunk.ChunkManager;
+import net.minecraft.world.chunk.ChunkStatus;
 import net.minecraft.world.chunk.WorldChunk;
 import org.objectweb.asm.Opcodes;
 import org.spongepowered.asm.mixin.Final;
@@ -49,6 +53,11 @@ public abstract class ServerChunkManagerMixin extends ChunkManager {
         if (ParallelProcessor.shouldThreadChunks())
             return;
         else instance.visit("getChunkCacheMiss");
+    }
+
+    @WrapMethod(method = "putInCache")
+    private synchronized void syncPutInCache(long pos, Chunk chunk, ChunkStatus status, Operation<Void> original) {
+        original.call(pos, chunk, status);
     }
 
 //    @Inject(method = "getChunk(IILnet/minecraft/world/chunk/ChunkStatus;Z)Lnet/minecraft/world/chunk/Chunk;", at = @At(value = "INVOKE", target = "Lnet/minecraft/server/world/ServerChunkManager$MainThreadExecutor;runTasks(Ljava/util/function/BooleanSupplier;)V"))
