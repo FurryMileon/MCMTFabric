@@ -1,5 +1,6 @@
 package net.himeki.mcmtfabric.mixin;
 
+import net.minecraft.entity.ai.WardenAngerManager;
 import net.minecraft.entity.ai.pathing.EntityNavigation;
 import net.minecraft.entity.ai.pathing.PathMinHeap;
 import net.minecraft.util.math.random.CheckedRandom;
@@ -9,6 +10,6 @@ import net.minecraft.world.tick.ChunkTickScheduler;
 import org.spongepowered.asm.mixin.Mixin;
 
 @Mixin(value = {PathMinHeap.class, ChunkTickScheduler.class, LevelPropagator.class, EntityNavigation.class,
-        SimpleGameEventDispatcher.class, CheckedRandom.class})
+        SimpleGameEventDispatcher.class, CheckedRandom.class, WardenAngerManager.class})
 public class SyncAllMixin {
 }
