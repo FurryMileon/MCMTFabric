@@ -2,12 +2,8 @@ package net.himeki.mcmtfabric;
 
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
-import net.himeki.mcmtfabric.config.BlockEntityLists;
 import net.himeki.mcmtfabric.config.GeneralConfig;
 import net.himeki.mcmtfabric.parallelised.ThreadedChunksRange;
-import net.himeki.mcmtfabric.serdes.SerDesHookTypes;
-import net.himeki.mcmtfabric.serdes.SerDesRegistry;
-import net.himeki.mcmtfabric.serdes.filter.ISerDesFilter;
 import net.himeki.mcmtfabric.serdes.pools.PostExecutePool;
 import net.minecraft.block.entity.*;
 import net.minecraft.entity.Entity;
@@ -91,16 +87,17 @@ public class ParallelProcessor {
         }
     }
 
-    private static ThreadedChunksRange findMatchingRange(int chunkX, int chunkZ) {
+    private static ThreadedChunksRange findMatchingRange(int chunkX, int chunkZ, World world) {
         ChunkPos pos = new ChunkPos(chunkX, chunkZ);
         return chunkRangeCache.get(pos, key -> {
             synchronized (threadedChunksRanges) {
+                String worldId = world.getRegistryKey().getValue().toString();
                 for (ThreadedChunksRange range : threadedChunksRanges) {
-                    if (range.contains(chunkX, chunkZ)) {
+                    if (range.contains(worldId, chunkX, chunkZ)) {
                         return range;
                     }
                 }
-                return null; // Caffeine will handle null values appropriately
+                return null;
             }
         });
     }
@@ -233,7 +230,7 @@ public class ParallelProcessor {
         int chunkX = chunk.getPos().x;
         int chunkZ = chunk.getPos().z;
 
-        ThreadedChunksRange matchingRange = findMatchingRange(chunkX, chunkZ);
+        ThreadedChunksRange matchingRange = findMatchingRange(chunkX, chunkZ, world);
         if (matchingRange == null) {
             // Not inside any ThreadedChunksRange, execute on main thread
             world.tickChunk(chunk, k);
@@ -277,7 +274,7 @@ public class ParallelProcessor {
         int chunkX = entityIn.getChunkPos().x;
         int chunkZ = entityIn.getChunkPos().z;
 
-        ThreadedChunksRange matchingRange = findMatchingRange(chunkX, chunkZ);
+        ThreadedChunksRange matchingRange = findMatchingRange(chunkX, chunkZ, serverworld);
         if (matchingRange == null) {
             tickConsumer.accept(entityIn);
             return;
@@ -330,7 +327,7 @@ public class ParallelProcessor {
         int chunkX = blockEntity.getPos().getX() >> 4;
         int chunkZ = blockEntity.getPos().getZ() >> 4;
 
-        ThreadedChunksRange matchingRange = findMatchingRange(chunkX, chunkZ);
+        ThreadedChunksRange matchingRange = findMatchingRange(chunkX, chunkZ, world);
         if (matchingRange == null) {
             // Not inside any ThreadedChunksRange, execute on main thread
             tte.tick();

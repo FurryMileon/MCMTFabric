@@ -8,6 +8,7 @@ accessible method net/minecraft/server/world/ServerChunkManager getChunkHolder (
 accessible method net/minecraft/server/world/ServerChunkManager$MainThreadExecutor runTask ()Z
 accessible method net/minecraft/world/World tickBlockEntities ()V
 accessible method net/minecraft/server/world/ServerChunkLoadingManager shouldTick (Lnet/minecraft/util/math/ChunkPos;)Z
+accessible method net/minecraft/command/argument/RegistryKeyArgumentType getKey (Lcom/mojang/brigadier/context/CommandContext;Ljava/lang/String;Lnet/minecraft/registry/RegistryKey;Lcom/mojang/brigadier/exceptions/DynamicCommandExceptionType;)Lnet/minecraft/registry/RegistryKey;
 accessible class net/minecraft/server/world/ServerChunkLoadingManager$EntityTracker
 accessible class net/minecraft/server/world/ServerChunkManager$ChunkWithHolder
 accessible class net/minecraft/world/chunk/WorldChunk$WrappedBlockEntityTickInvoker

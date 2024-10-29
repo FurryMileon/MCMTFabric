@@ -12,6 +12,7 @@ public class ThreadedChunksRange implements ConfigData {
     public boolean multiThreadChunkTick = false;
     public boolean multiThreadEntityTick = false;
     public boolean multiThreadBlockEntityTick = false;
+    public String worldId; // Store world identifier
 
     @ConfigEntry.Gui.Excluded
     private transient ExecutorService chunkTickExecutor;
@@ -24,16 +25,17 @@ public class ThreadedChunksRange implements ConfigData {
         // Default constructor required for serialization
     }
 
-    public ThreadedChunksRange(String name, int x1, int z1, int x2, int z2) {
+    public ThreadedChunksRange(String name, String worldId, int x1, int z1, int x2, int z2) {
         this.name = name;
+        this.worldId = worldId;
         this.x1 = Math.min(x1, x2);
         this.z1 = Math.min(z1, z2);
         this.x2 = Math.max(x1, x2);
         this.z2 = Math.max(z1, z2);
     }
 
-    public boolean contains(int x, int z) {
-        return x >= x1 && x <= x2 && z >= z1 && z <= z2;
+    public boolean contains(String worldId, int x, int z) {
+        return this.worldId.equals(worldId) && x >= x1 && x <= x2 && z >= z1 && z <= z2;
     }
 
     public boolean isMultiThreadChunkTick() {
@@ -128,6 +130,10 @@ public class ThreadedChunksRange implements ConfigData {
 
     public String getName() {
         return name;
+    }
+
+    public String getWorldId() {
+        return worldId;
     }
 
     public int getX1() {

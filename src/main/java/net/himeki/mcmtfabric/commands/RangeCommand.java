@@ -6,14 +6,19 @@ import com.mojang.brigadier.arguments.StringArgumentType;
 import com.mojang.brigadier.builder.LiteralArgumentBuilder;
 import com.mojang.brigadier.context.CommandContext;
 import com.mojang.brigadier.exceptions.CommandSyntaxException;
+import com.mojang.brigadier.exceptions.DynamicCommandExceptionType;
 import com.mojang.brigadier.suggestion.Suggestions;
 import com.mojang.brigadier.suggestion.SuggestionsBuilder;
 import me.shedaniel.autoconfig.AutoConfig;
 import net.himeki.mcmtfabric.ParallelProcessor;
 import net.himeki.mcmtfabric.config.ThreadedRangesConfig;
 import net.himeki.mcmtfabric.parallelised.ThreadedChunksRange;
+import net.minecraft.command.argument.RegistryKeyArgumentType;
+import net.minecraft.registry.RegistryKey;
+import net.minecraft.registry.RegistryKeys;
 import net.minecraft.server.command.ServerCommandSource;
 import net.minecraft.text.Text;
+import net.minecraft.world.World;
 
 import java.util.ArrayList;
 import java.util.concurrent.CompletableFuture;
@@ -22,21 +27,26 @@ import static net.minecraft.server.command.CommandManager.argument;
 import static net.minecraft.server.command.CommandManager.literal;
 
 public class RangeCommand {
+    private static final DynamicCommandExceptionType INVALID_WORLD_EXCEPTION = new DynamicCommandExceptionType(
+            (id) -> Text.literal("Invalid world: " + id));
+
     public static LiteralArgumentBuilder<ServerCommandSource> registerRange(LiteralArgumentBuilder<ServerCommandSource> root) {
         return root.requires(cmdSrc -> cmdSrc.hasPermissionLevel(0))
                 .then(literal("add")
-                        .then(literal("radius")  // Radius mode
+                        .then(literal("radius")
                                 .then(argument("x", IntegerArgumentType.integer())
                                         .suggests((context, builder) -> suggestChunkCoordinate(context.getSource(), builder, true))
                                         .then(argument("z", IntegerArgumentType.integer())
                                                 .suggests((context, builder) -> suggestChunkCoordinate(context.getSource(), builder, false))
                                                 .then(argument("radius", IntegerArgumentType.integer(1))
-                                                        .executes(cmdCtx -> executeRadiusAdd(cmdCtx, null))
-                                                        .then(literal("named")
-                                                                .then(argument("name", StringArgumentType.word())
-                                                                        .executes(cmdCtx -> executeRadiusAdd(cmdCtx,
-                                                                                StringArgumentType.getString(cmdCtx, "name")))))))))
-                        .then(literal("chunks")  // Explicit mode
+                                                        .then(literal("in")
+                                                                .then(argument("world", RegistryKeyArgumentType.registryKey(RegistryKeys.WORLD))
+                                                                        .executes(cmdCtx -> executeRadiusAdd(cmdCtx, null))
+                                                                        .then(literal("named")
+                                                                                .then(argument("name", StringArgumentType.word())
+                                                                                        .executes(cmdCtx -> executeRadiusAdd(cmdCtx,
+                                                                                                StringArgumentType.getString(cmdCtx, "name")))))))))))
+                        .then(literal("chunks")
                                 .then(literal("from")
                                         .then(argument("x1", IntegerArgumentType.integer())
                                                 .suggests((context, builder) -> suggestChunkCoordinate(context.getSource(), builder, true))
@@ -47,11 +57,13 @@ public class RangeCommand {
                                                                         .suggests((context, builder) -> suggestChunkCoordinate(context.getSource(), builder, true))
                                                                         .then(argument("z2", IntegerArgumentType.integer())
                                                                                 .suggests((context, builder) -> suggestChunkCoordinate(context.getSource(), builder, false))
-                                                                                .executes(cmdCtx -> executeExplicitAdd(cmdCtx, null))
-                                                                                .then(literal("named")
-                                                                                        .then(argument("name", StringArgumentType.word())
-                                                                                                .executes(cmdCtx -> executeExplicitAdd(cmdCtx,
-                                                                                                        StringArgumentType.getString(cmdCtx, "name")))))))))))))
+                                                                                .then(literal("in")
+                                                                                        .then(argument("world", RegistryKeyArgumentType.registryKey(RegistryKeys.WORLD))
+                                                                                                .executes(cmdCtx -> executeExplicitAdd(cmdCtx, null))
+                                                                                                .then(literal("named")
+                                                                                                        .then(argument("name", StringArgumentType.word())
+                                                                                                                .executes(cmdCtx -> executeExplicitAdd(cmdCtx,
+                                                                                                                        StringArgumentType.getString(cmdCtx, "name")))))))))))))))
                 .then(literal("set")
                         .then(argument("name", StringArgumentType.word())
                                 .suggests((context, builder) -> suggestRangeNames(context.getSource(), builder))
@@ -77,8 +89,8 @@ public class RangeCommand {
         if (config.threadedRanges == null) return false;
 
         for (ThreadedChunksRange existingRange : config.threadedRanges) {
-            // Check if ranges have identical coordinates
-            if (existingRange.getX1() == newRange.getX1() &&
+            if (existingRange.getWorldId().equals(newRange.getWorldId()) &&
+                    existingRange.getX1() == newRange.getX1() &&
                     existingRange.getZ1() == newRange.getZ1() &&
                     existingRange.getX2() == newRange.getX2() &&
                     existingRange.getZ2() == newRange.getZ2()) {
@@ -170,30 +182,28 @@ public class RangeCommand {
         int centerZ = IntegerArgumentType.getInteger(cmdCtx, "z");
         int radius = IntegerArgumentType.getInteger(cmdCtx, "radius");
 
-        // Calculate square bounds
+        RegistryKey<World> worldKey = RegistryKeyArgumentType.getKey(cmdCtx, "world", RegistryKeys.WORLD, INVALID_WORLD_EXCEPTION);
+        String worldId = worldKey.getValue().toString();
+
         int x1 = centerX - radius;
         int z1 = centerZ - radius;
         int x2 = centerX + radius;
         int z2 = centerZ + radius;
 
         String name = providedName != null ? providedName :
-                String.format("chunk_%d_%d_to_%d_%d", x1, z1, x2, z2);
+                String.format("chunk_%s_%d_%d_to_%d_%d", worldKey.getValue().getPath(), x1, z1, x2, z2);
 
-        ThreadedChunksRange range = new ThreadedChunksRange(name, x1, z1, x2, z2);
-        // Set default values for ticks
+        ThreadedChunksRange range = new ThreadedChunksRange(name, worldId, x1, z1, x2, z2);
         range.setMultiThreadChunkTick(false);
         range.setMultiThreadEntityTick(false);
         range.setMultiThreadBlockEntityTick(false);
 
         try {
-            // Try to save to config first to check for duplicates
             saveRangeToConfig(range);
-
-            // If successful, add to runtime list
             ParallelProcessor.addThreadedChunksRange(range);
 
-            String message = String.format("Added new threaded range '%s' with radius %d around chunk (%d, %d)",
-                    name, radius, centerX, centerZ);
+            String message = String.format("Added new threaded range '%s' with radius %d around chunk (%d, %d) in world %s",
+                    name, radius, centerX, centerZ, worldKey.getValue());
             cmdCtx.getSource().sendFeedback(() -> Text.literal(message), true);
             return 1;
         } catch (IllegalStateException e) {
@@ -208,24 +218,23 @@ public class RangeCommand {
         int x2 = IntegerArgumentType.getInteger(cmdCtx, "x2");
         int z2 = IntegerArgumentType.getInteger(cmdCtx, "z2");
 
-        String name = providedName != null ? providedName :
-                String.format("chunk_%d_%d_to_%d_%d", x1, z1, x2, z2);
+        RegistryKey<World> worldKey = RegistryKeyArgumentType.getKey(cmdCtx, "world", RegistryKeys.WORLD, INVALID_WORLD_EXCEPTION);
+        String worldId = worldKey.getValue().toString();
 
-        ThreadedChunksRange range = new ThreadedChunksRange(name, x1, z1, x2, z2);
-        // Set default values for ticks
+        String name = providedName != null ? providedName :
+                String.format("chunk_%s_%d_%d_to_%d_%d", worldKey.getValue().getPath(), x1, z1, x2, z2);
+
+        ThreadedChunksRange range = new ThreadedChunksRange(name, worldId, x1, z1, x2, z2);
         range.setMultiThreadChunkTick(false);
         range.setMultiThreadEntityTick(false);
         range.setMultiThreadBlockEntityTick(false);
 
         try {
-            // Try to save to config first to check for duplicates
             saveRangeToConfig(range);
-
-            // If successful, add to runtime list
             ParallelProcessor.addThreadedChunksRange(range);
 
-            String message = String.format("Added new threaded range '%s' from (%d, %d) to (%d, %d)",
-                    name, x1, z1, x2, z2);
+            String message = String.format("Added new threaded range '%s' from (%d, %d) to (%d, %d) in world %s",
+                    name, x1, z1, x2, z2, worldKey.getValue());
             cmdCtx.getSource().sendFeedback(() -> Text.literal(message), true);
             return 1;
         } catch (IllegalStateException e) {
