@@ -9,6 +9,7 @@ import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
 import net.himeki.mcmtfabric.commands.ConfigCommand;
 import net.himeki.mcmtfabric.commands.StatsCommand;
 import net.himeki.mcmtfabric.config.GeneralConfig;
+import net.himeki.mcmtfabric.config.ThreadedRangesConfig;
 import net.himeki.mcmtfabric.jmx.JMXRegistration;
 import net.himeki.mcmtfabric.serdes.SerDesRegistry;
 import net.minecraft.util.ActionResult;
@@ -18,6 +19,7 @@ import org.apache.logging.log4j.Logger;
 public class MCMT implements ModInitializer {
     public static final Logger LOGGER = LogManager.getLogger();
     public static GeneralConfig config;
+    public static ThreadedRangesConfig threadedRangesConfig;
 
     @Override
     public void onInitialize() {
@@ -32,6 +34,11 @@ public class MCMT implements ModInitializer {
         });
         holder.load();  // Load again to run loadTELists() handler
         config = holder.getConfig();
+
+        ConfigHolder<ThreadedRangesConfig> trHolder = AutoConfig.register(ThreadedRangesConfig.class, Toml4jConfigSerializer::new);
+        trHolder.load();
+
+        trHolder.getConfig().threadedRanges.forEach(ParallelProcessor::addThreadedChunksRange);
 
         if (System.getProperty("jmt.mcmt.jmx") != null) {
             JMXRegistration.register();

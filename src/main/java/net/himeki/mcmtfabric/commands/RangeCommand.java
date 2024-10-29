@@ -1,0 +1,298 @@
+package net.himeki.mcmtfabric.commands;
+
+import com.mojang.brigadier.arguments.BoolArgumentType;
+import com.mojang.brigadier.arguments.IntegerArgumentType;
+import com.mojang.brigadier.arguments.StringArgumentType;
+import com.mojang.brigadier.builder.LiteralArgumentBuilder;
+import com.mojang.brigadier.context.CommandContext;
+import com.mojang.brigadier.exceptions.CommandSyntaxException;
+import com.mojang.brigadier.suggestion.Suggestions;
+import com.mojang.brigadier.suggestion.SuggestionsBuilder;
+import me.shedaniel.autoconfig.AutoConfig;
+import net.himeki.mcmtfabric.ParallelProcessor;
+import net.himeki.mcmtfabric.config.ThreadedRangesConfig;
+import net.himeki.mcmtfabric.parallelised.ThreadedChunksRange;
+import net.minecraft.server.command.ServerCommandSource;
+import net.minecraft.text.Text;
+
+import java.util.ArrayList;
+import java.util.concurrent.CompletableFuture;
+
+import static net.minecraft.server.command.CommandManager.argument;
+import static net.minecraft.server.command.CommandManager.literal;
+
+public class RangeCommand {
+    public static LiteralArgumentBuilder<ServerCommandSource> registerRange(LiteralArgumentBuilder<ServerCommandSource> root) {
+        return root.requires(cmdSrc -> cmdSrc.hasPermissionLevel(0))
+                .then(literal("add")
+                        .then(literal("radius")  // Radius mode
+                                .then(argument("x", IntegerArgumentType.integer())
+                                        .suggests((context, builder) -> suggestChunkCoordinate(context.getSource(), builder, true))
+                                        .then(argument("z", IntegerArgumentType.integer())
+                                                .suggests((context, builder) -> suggestChunkCoordinate(context.getSource(), builder, false))
+                                                .then(argument("radius", IntegerArgumentType.integer(1))
+                                                        .executes(cmdCtx -> executeRadiusAdd(cmdCtx, null))
+                                                        .then(literal("named")
+                                                                .then(argument("name", StringArgumentType.word())
+                                                                        .executes(cmdCtx -> executeRadiusAdd(cmdCtx,
+                                                                                StringArgumentType.getString(cmdCtx, "name")))))))))
+                        .then(literal("chunks")  // Explicit mode
+                                .then(literal("from")
+                                        .then(argument("x1", IntegerArgumentType.integer())
+                                                .suggests((context, builder) -> suggestChunkCoordinate(context.getSource(), builder, true))
+                                                .then(argument("z1", IntegerArgumentType.integer())
+                                                        .suggests((context, builder) -> suggestChunkCoordinate(context.getSource(), builder, false))
+                                                        .then(literal("to")
+                                                                .then(argument("x2", IntegerArgumentType.integer())
+                                                                        .suggests((context, builder) -> suggestChunkCoordinate(context.getSource(), builder, true))
+                                                                        .then(argument("z2", IntegerArgumentType.integer())
+                                                                                .suggests((context, builder) -> suggestChunkCoordinate(context.getSource(), builder, false))
+                                                                                .executes(cmdCtx -> executeExplicitAdd(cmdCtx, null))
+                                                                                .then(literal("named")
+                                                                                        .then(argument("name", StringArgumentType.word())
+                                                                                                .executes(cmdCtx -> executeExplicitAdd(cmdCtx,
+                                                                                                        StringArgumentType.getString(cmdCtx, "name")))))))))))))
+                .then(literal("set")
+                        .then(argument("name", StringArgumentType.word())
+                                .suggests((context, builder) -> suggestRangeNames(context.getSource(), builder))
+                                .then(literal("chunkTick")
+                                        .then(argument("enabled", BoolArgumentType.bool())
+                                                .executes(cmdCtx -> executeSetTick(cmdCtx, "chunkTick"))))
+                                .then(literal("entityTick")
+                                        .then(argument("enabled", BoolArgumentType.bool())
+                                                .executes(cmdCtx -> executeSetTick(cmdCtx, "entityTick"))))
+                                .then(literal("blockEntityTick")
+                                        .then(argument("enabled", BoolArgumentType.bool())
+                                                .executes(cmdCtx -> executeSetTick(cmdCtx, "blockEntityTick"))))))
+                .then(literal("remove")
+                        .then(argument("name", StringArgumentType.word())
+                                .suggests((context, builder) -> suggestRangeNames(context.getSource(), builder))
+                                .executes(RangeCommand::executeRemove)));
+    }
+
+    /**
+     * Checks if a range with the same coordinates already exists
+     */
+    private static boolean isRangeOverlapping(ThreadedChunksRange newRange, ThreadedRangesConfig config) {
+        if (config.threadedRanges == null) return false;
+
+        for (ThreadedChunksRange existingRange : config.threadedRanges) {
+            // Check if ranges have identical coordinates
+            if (existingRange.getX1() == newRange.getX1() &&
+                    existingRange.getZ1() == newRange.getZ1() &&
+                    existingRange.getX2() == newRange.getX2() &&
+                    existingRange.getZ2() == newRange.getZ2()) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Checks if a range with the same name already exists
+     */
+    private static boolean doesRangeNameExist(String name, ThreadedRangesConfig config) {
+        if (config.threadedRanges == null) return false;
+
+        return config.threadedRanges.stream()
+                .anyMatch(range -> range.getName().equals(name));
+    }
+
+    private static void saveRangeToConfig(ThreadedChunksRange range) {
+        ThreadedRangesConfig rangesConfig = AutoConfig.getConfigHolder(ThreadedRangesConfig.class).getConfig();
+
+        // Initialize the list if null
+        if (rangesConfig.threadedRanges == null) {
+            rangesConfig.threadedRanges = new ArrayList<>();
+        }
+
+        // Check for duplicates
+        if (doesRangeNameExist(range.getName(), rangesConfig)) {
+            throw new IllegalStateException("A range with the name '" + range.getName() + "' already exists");
+        }
+
+        if (isRangeOverlapping(range, rangesConfig)) {
+            throw new IllegalStateException(
+                    String.format("A range with the same coordinates (%d,%d) to (%d,%d) already exists",
+                            range.getX1(), range.getZ1(), range.getX2(), range.getZ2())
+            );
+        }
+
+        // Add the new range
+        rangesConfig.threadedRanges.add(range);
+
+        // Save the config
+        AutoConfig.getConfigHolder(ThreadedRangesConfig.class).save();
+    }
+
+    private static int executeRemove(CommandContext<ServerCommandSource> cmdCtx) {
+        String name = StringArgumentType.getString(cmdCtx, "name");
+        ThreadedRangesConfig rangesConfig = AutoConfig.getConfigHolder(ThreadedRangesConfig.class).getConfig();
+
+        // Check if range exists
+        ThreadedChunksRange targetRange = null;
+        if (rangesConfig.threadedRanges != null) {
+            for (ThreadedChunksRange range : rangesConfig.threadedRanges) {
+                if (range.getName().equals(name)) {
+                    targetRange = range;
+                    break;
+                }
+            }
+        }
+
+        if (targetRange == null) {
+            cmdCtx.getSource().sendError(Text.literal("No range found with name: " + name));
+            return 0;
+        }
+
+        // Remove from runtime list first
+        ParallelProcessor.removeThreadedChunksRangeByName(name);
+
+        // Then remove from config
+        removeRangeFromConfig(name);
+
+        String message = String.format("Removed threaded range '%s'", name);
+        cmdCtx.getSource().sendFeedback(() -> Text.literal(message), true);
+        return 1;
+    }
+
+    private static void removeRangeFromConfig(String name) {
+        ThreadedRangesConfig rangesConfig = AutoConfig.getConfigHolder(ThreadedRangesConfig.class).getConfig();
+
+        if (rangesConfig.threadedRanges != null) {
+            rangesConfig.threadedRanges.removeIf(r -> r.getName().equals(name));
+            AutoConfig.getConfigHolder(ThreadedRangesConfig.class).save();
+        }
+    }
+
+    private static int executeRadiusAdd(CommandContext<ServerCommandSource> cmdCtx, String providedName) throws CommandSyntaxException {
+        int centerX = IntegerArgumentType.getInteger(cmdCtx, "x");
+        int centerZ = IntegerArgumentType.getInteger(cmdCtx, "z");
+        int radius = IntegerArgumentType.getInteger(cmdCtx, "radius");
+
+        // Calculate square bounds
+        int x1 = centerX - radius;
+        int z1 = centerZ - radius;
+        int x2 = centerX + radius;
+        int z2 = centerZ + radius;
+
+        String name = providedName != null ? providedName :
+                String.format("chunk_%d_%d_to_%d_%d", x1, z1, x2, z2);
+
+        ThreadedChunksRange range = new ThreadedChunksRange(name, x1, z1, x2, z2);
+        // Set default values for ticks
+        range.setMultiThreadChunkTick(false);
+        range.setMultiThreadEntityTick(false);
+        range.setMultiThreadBlockEntityTick(false);
+
+        try {
+            // Try to save to config first to check for duplicates
+            saveRangeToConfig(range);
+
+            // If successful, add to runtime list
+            ParallelProcessor.addThreadedChunksRange(range);
+
+            String message = String.format("Added new threaded range '%s' with radius %d around chunk (%d, %d)",
+                    name, radius, centerX, centerZ);
+            cmdCtx.getSource().sendFeedback(() -> Text.literal(message), true);
+            return 1;
+        } catch (IllegalStateException e) {
+            cmdCtx.getSource().sendError(Text.literal(e.getMessage()));
+            return 0;
+        }
+    }
+
+    private static int executeExplicitAdd(CommandContext<ServerCommandSource> cmdCtx, String providedName) throws CommandSyntaxException {
+        int x1 = IntegerArgumentType.getInteger(cmdCtx, "x1");
+        int z1 = IntegerArgumentType.getInteger(cmdCtx, "z1");
+        int x2 = IntegerArgumentType.getInteger(cmdCtx, "x2");
+        int z2 = IntegerArgumentType.getInteger(cmdCtx, "z2");
+
+        String name = providedName != null ? providedName :
+                String.format("chunk_%d_%d_to_%d_%d", x1, z1, x2, z2);
+
+        ThreadedChunksRange range = new ThreadedChunksRange(name, x1, z1, x2, z2);
+        // Set default values for ticks
+        range.setMultiThreadChunkTick(false);
+        range.setMultiThreadEntityTick(false);
+        range.setMultiThreadBlockEntityTick(false);
+
+        try {
+            // Try to save to config first to check for duplicates
+            saveRangeToConfig(range);
+
+            // If successful, add to runtime list
+            ParallelProcessor.addThreadedChunksRange(range);
+
+            String message = String.format("Added new threaded range '%s' from (%d, %d) to (%d, %d)",
+                    name, x1, z1, x2, z2);
+            cmdCtx.getSource().sendFeedback(() -> Text.literal(message), true);
+            return 1;
+        } catch (IllegalStateException e) {
+            cmdCtx.getSource().sendError(Text.literal(e.getMessage()));
+            return 0;
+        }
+    }
+
+    private static int executeSetTick(CommandContext<ServerCommandSource> cmdCtx, String tickType) throws CommandSyntaxException {
+        String name = StringArgumentType.getString(cmdCtx, "name");
+        boolean enabled = BoolArgumentType.getBool(cmdCtx, "enabled");
+
+        ThreadedRangesConfig rangesConfig = AutoConfig.getConfigHolder(ThreadedRangesConfig.class).getConfig();
+        ThreadedChunksRange targetRange = null;
+
+        for (ThreadedChunksRange range : rangesConfig.threadedRanges) {
+            if (range.getName().equals(name)) {
+                targetRange = range;
+                break;
+            }
+        }
+
+        if (targetRange == null) {
+            cmdCtx.getSource().sendError(Text.literal("No range found with name: " + name));
+            return 0;
+        }
+
+        switch (tickType) {
+            case "chunkTick":
+                targetRange.setMultiThreadChunkTick(enabled);
+                break;
+            case "entityTick":
+                targetRange.setMultiThreadEntityTick(enabled);
+                break;
+            case "blockEntityTick":
+                targetRange.setMultiThreadBlockEntityTick(enabled);
+                break;
+        }
+
+        // Save the updated config
+        AutoConfig.getConfigHolder(ThreadedRangesConfig.class).save();
+
+        String message = String.format("Set %s to %s for range '%s'", tickType, enabled, name);
+        cmdCtx.getSource().sendFeedback(() -> Text.literal(message), true);
+        return 1;
+    }
+
+    private static CompletableFuture<Suggestions> suggestChunkCoordinate(ServerCommandSource source, SuggestionsBuilder builder, boolean isX) {
+        try {
+            if (source.getPlayer() != null) {
+                int chunkCoord = isX ?
+                        source.getPlayer().getChunkPos().x :
+                        source.getPlayer().getChunkPos().z;
+
+                // First suggest current position
+                builder.suggest(chunkCoord, Text.literal(String.format("current %s", isX ? "X" : "Z")));
+            }
+        } catch (Exception e) {
+        }
+        return builder.buildFuture();
+    }
+
+    private static CompletableFuture<Suggestions> suggestRangeNames(ServerCommandSource source, SuggestionsBuilder builder) {
+        ThreadedRangesConfig rangesConfig = AutoConfig.getConfigHolder(ThreadedRangesConfig.class).getConfig();
+        for (ThreadedChunksRange range : rangesConfig.threadedRanges) {
+            builder.suggest(range.getName());
+        }
+        return builder.buildFuture();
+    }
+}

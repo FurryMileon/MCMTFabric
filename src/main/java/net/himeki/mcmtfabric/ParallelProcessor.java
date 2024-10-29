@@ -1,15 +1,15 @@
 package net.himeki.mcmtfabric;
 
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
 import net.himeki.mcmtfabric.config.BlockEntityLists;
 import net.himeki.mcmtfabric.config.GeneralConfig;
+import net.himeki.mcmtfabric.parallelised.ThreadedChunksRange;
 import net.himeki.mcmtfabric.serdes.SerDesHookTypes;
 import net.himeki.mcmtfabric.serdes.SerDesRegistry;
 import net.himeki.mcmtfabric.serdes.filter.ISerDesFilter;
 import net.himeki.mcmtfabric.serdes.pools.PostExecutePool;
-import net.minecraft.block.entity.PistonBlockEntity;
-import net.minecraft.block.entity.SculkCatalystBlockEntity;
-import net.minecraft.block.entity.SculkSensorBlockEntity;
-import net.minecraft.block.entity.SculkShriekerBlockEntity;
+import net.minecraft.block.entity.*;
 import net.minecraft.entity.Entity;
 import net.minecraft.entity.FallingBlockEntity;
 import net.minecraft.entity.TntEntity;
@@ -17,6 +17,7 @@ import net.minecraft.entity.passive.AllayEntity;
 import net.minecraft.entity.player.PlayerEntity;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.world.ServerWorld;
+import net.minecraft.util.math.ChunkPos;
 import net.minecraft.world.World;
 import net.minecraft.world.chunk.BlockEntityTickInvoker;
 import net.minecraft.world.chunk.WorldChunk;
@@ -38,13 +39,74 @@ public class ParallelProcessor {
 
     static ConcurrentHashMap<ServerWorld, Phaser> sharedPhasers = new ConcurrentHashMap<>();
     static ExecutorService worldPool;
-    static ExecutorService tickPool;
     static MinecraftServer mcs;
     static AtomicBoolean isTicking = new AtomicBoolean();
 
+    static Map<String, Set<Thread>> mcThreadTracker = new ConcurrentHashMap<String, Set<Thread>>();
+
+    // List of ThreadedChunksRange
+    private static List<ThreadedChunksRange> threadedChunksRanges = new ArrayList<>();
+
+    private static final Cache<ChunkPos, ThreadedChunksRange> chunkRangeCache = Caffeine.newBuilder()
+            .maximumSize(1000)
+            .build();
+
+    public static void resetThreadedChunksRanges() {
+        synchronized (threadedChunksRanges) {
+            for (ThreadedChunksRange range : threadedChunksRanges) {
+                range.shutdownExecutors();
+            }
+            threadedChunksRanges.clear();
+            chunkRangeCache.invalidateAll(); // Invalidate cache when ranges are reset
+        }
+    }
+
+    public static void addThreadedChunksRange(ThreadedChunksRange range) {
+        synchronized (threadedChunksRanges) {
+            threadedChunksRanges.add(range);
+            chunkRangeCache.invalidateAll(); // Invalidate cache when a new range is added
+        }
+    }
+
+    public static void removeThreadedChunksRange(ThreadedChunksRange range) {
+        synchronized (threadedChunksRanges) {
+            threadedChunksRanges.remove(range);
+            range.shutdownExecutors();
+            chunkRangeCache.invalidateAll(); // Invalidate cache when a range is removed
+        }
+    }
+
+    public static void removeThreadedChunksRangeByName(String name) {
+        synchronized (threadedChunksRanges) {
+            ThreadedChunksRange range = null;
+            for (ThreadedChunksRange r : threadedChunksRanges) {
+                if (r.getName().equals(name)) {
+                    range = r;
+                    break;
+                }
+            }
+            if (range != null) {
+                removeThreadedChunksRange(range);
+            }
+        }
+    }
+
+    private static ThreadedChunksRange findMatchingRange(int chunkX, int chunkZ) {
+        ChunkPos pos = new ChunkPos(chunkX, chunkZ);
+        return chunkRangeCache.get(pos, key -> {
+            synchronized (threadedChunksRanges) {
+                for (ThreadedChunksRange range : threadedChunksRanges) {
+                    if (range.contains(chunkX, chunkZ)) {
+                        return range;
+                    }
+                }
+                return null; // Caffeine will handle null values appropriately
+            }
+        });
+    }
+
     public static void setupThreadPool(int parallelism) {
         AtomicInteger worldPoolThreadID = new AtomicInteger();
-        AtomicInteger tickPoolThreadID = new AtomicInteger();
         final ClassLoader cl = MCMT.class.getClassLoader();
         ForkJoinPool.ForkJoinWorkerThreadFactory worldThreadFactory = p -> {
             ForkJoinWorkerThread fjwt = ForkJoinPool.defaultForkJoinWorkerThreadFactory.newThread(p);
@@ -53,26 +115,8 @@ public class ParallelProcessor {
             fjwt.setContextClassLoader(cl);
             return fjwt;
         };
-        ForkJoinPool.ForkJoinWorkerThreadFactory tickThreadFactory = p -> {
-            ForkJoinWorkerThread fjwt = ForkJoinPool.defaultForkJoinWorkerThreadFactory.newThread(p);
-            fjwt.setName("MCMT-Tick-Pool-Thread-" + tickPoolThreadID.getAndIncrement());
-            regThread("MCMT-Tick", fjwt);
-            fjwt.setContextClassLoader(cl);
-            return fjwt;
-        };
         worldPool = new ForkJoinPool(Math.min(3, Math.max(parallelism / 2, 1)), worldThreadFactory, null, true);
-        tickPool = new ForkJoinPool(parallelism, tickThreadFactory, null, true);
     }
-
-    /**
-     * Creates and sets up the thread pool
-     */
-    static {
-        // Must be static here due to class loading shenanagins
-        // setupThreadPool(4);
-    }
-
-    static Map<String, Set<Thread>> mcThreadTracker = new ConcurrentHashMap<String, Set<Thread>>();
 
     // Statistics
     public static AtomicInteger currentWorlds = new AtomicInteger();
@@ -186,25 +230,23 @@ public class ParallelProcessor {
     }
 
     public static void callTickChunks(ServerWorld world, WorldChunk chunk, int k) {
-        if (config.disabled || config.disableEnvironment) {
+        int chunkX = chunk.getPos().x;
+        int chunkZ = chunk.getPos().z;
+
+        ThreadedChunksRange matchingRange = findMatchingRange(chunkX, chunkZ);
+        if (matchingRange == null) {
+            // Not inside any ThreadedChunksRange, execute on main thread
             world.tickChunk(chunk, k);
             return;
         }
-        String taskName = null;
-        if (config.opsTracing) {
-            taskName = "EnvTick: " + chunk.toString() + "@" + chunk.hashCode();
-            currentTasks.add(taskName);
-        }
-        String finalTaskName = taskName;
+
+        ExecutorService executor = matchingRange.getChunkTickExecutor();
         sharedPhasers.get(world).register();
-        tickPool.execute(() -> {
+        executor.execute(() -> {
             try {
-                currentEnvs.incrementAndGet();
                 world.tickChunk(chunk, k);
             } finally {
-                if (config.opsTracing) currentTasks.remove(finalTaskName);
                 sharedPhasers.get(world).arriveAndDeregister();
-                currentEnvs.decrementAndGet();
             }
         });
     }
@@ -226,30 +268,28 @@ public class ParallelProcessor {
             tickConsumer.accept(entityIn);
             return;
         }
-        if (entityIn instanceof PlayerEntity || entityIn instanceof FallingBlockEntity || entityIn instanceof AllayEntity || entityIn instanceof TntEntity) {
+        if (entityIn instanceof PlayerEntity || entityIn instanceof FallingBlockEntity ||
+                entityIn instanceof AllayEntity || entityIn instanceof TntEntity) {
             tickConsumer.accept(entityIn);
             return;
         }
-        String taskName = null;
-        if (config.opsTracing) {
-            taskName = "EntityTick: " + entityIn.toString()/* + KG: Wayyy too slow. Maybe for debug but needs to be done via flag in that circumstance "@" + entityIn.hashCode()*/;
-            currentTasks.add(taskName);
+
+        int chunkX = entityIn.getChunkPos().x;
+        int chunkZ = entityIn.getChunkPos().z;
+
+        ThreadedChunksRange matchingRange = findMatchingRange(chunkX, chunkZ);
+        if (matchingRange == null) {
+            tickConsumer.accept(entityIn);
+            return;
         }
-        String finalTaskName = taskName;
+
+        ExecutorService executor = matchingRange.getEntityTickExecutor();
         sharedPhasers.get(serverworld).register();
-        tickPool.execute(() -> {
+        executor.execute(() -> {
             try {
-                final ISerDesFilter filter = SerDesRegistry.getFilter(SerDesHookTypes.EntityTick, entityIn.getClass());
-                currentEnts.incrementAndGet();
-                if (filter != null) {
-                    filter.serialise(() -> tickConsumer.accept(entityIn), entityIn, entityIn.getBlockPos(), serverworld, SerDesHookTypes.EntityTick);
-                } else {
-                    tickConsumer.accept(entityIn);
-                }
+                tickConsumer.accept(entityIn);
             } finally {
-                if (config.opsTracing) currentTasks.remove(finalTaskName);
                 sharedPhasers.get(serverworld).arriveAndDeregister();
-                currentEnts.decrementAndGet();
             }
         });
     }
@@ -267,58 +307,45 @@ public class ParallelProcessor {
     }
 
     public static void callBlockEntityTick(BlockEntityTickInvoker tte, World world) {
-        if ((world instanceof ServerWorld) && tte instanceof WorldChunk.WrappedBlockEntityTickInvoker && (((WorldChunk.WrappedBlockEntityTickInvoker) tte).wrapped instanceof WorldChunk.DirectBlockEntityTickInvoker<?>)) {
-            if (config.disabled || config.disableTileEntity) {
-                tte.tick();
-                return;
-            }
-            var blockEntity = ((WorldChunk.DirectBlockEntityTickInvoker<?>) ((WorldChunk.WrappedBlockEntityTickInvoker) tte).wrapped).blockEntity;
-            if (blockEntity instanceof PistonBlockEntity || blockEntity instanceof SculkSensorBlockEntity ||
-                    blockEntity instanceof SculkShriekerBlockEntity || blockEntity instanceof SculkCatalystBlockEntity) {
-                tte.tick();
-                return;
-            }
-            String taskName = null;
-            if (config.opsTracing) {
-                taskName = "TETick: " + tte.toString() + "@" + tte.hashCode();
-                currentTasks.add(taskName);
-            }
-            String finalTaskName = taskName;
-            sharedPhasers.get(world).register();
-            tickPool.execute(() -> {
-                try {
-                    final ISerDesFilter filter = SerDesRegistry.getFilter(SerDesHookTypes.TETick, ((WorldChunk.WrappedBlockEntityTickInvoker) tte).wrapped.getClass());
-                    currentTEs.incrementAndGet();
-                    if (filter != null) filter.serialise(tte::tick, tte, tte.getPos(), world, SerDesHookTypes.TETick);
-                    else tte.tick();
-                } catch (Exception e) {
-                    System.err.println("Exception ticking TE at " + tte.getPos());
-                    e.printStackTrace();
-                } finally {
-                    if (config.opsTracing) currentTasks.remove(finalTaskName);
-                    sharedPhasers.get(world).arriveAndDeregister();
-                    currentTEs.decrementAndGet();
-                }
-            });
-        } else tte.tick();
-    }
+        if (!(world instanceof ServerWorld) || !(tte instanceof WorldChunk.WrappedBlockEntityTickInvoker)) {
+            tte.tick();
+            return;
+        }
 
-    public static boolean filterTE(BlockEntityTickInvoker tte) {
-        boolean isLocking = false;
-        if (BlockEntityLists.teBlackList.contains(tte.getClass())) {
-            isLocking = true;
+        WorldChunk.WrappedBlockEntityTickInvoker wrappedInvoker = (WorldChunk.WrappedBlockEntityTickInvoker) tte;
+        if (!(wrappedInvoker.wrapped instanceof WorldChunk.DirectBlockEntityTickInvoker<?>)) {
+            tte.tick();
+            return;
         }
-        // Apparently a string starts with check is faster than Class.getPackage; who knew (I didn't)
-        if (!isLocking && config.chunkLockModded && !tte.getClass().getName().startsWith("net.minecraft.block.entity.")) {
-            isLocking = true;
+
+        BlockEntity blockEntity = ((WorldChunk.DirectBlockEntityTickInvoker<?>) wrappedInvoker.wrapped).blockEntity;
+        if (blockEntity instanceof PistonBlockEntity ||
+                blockEntity instanceof SculkSensorBlockEntity ||
+                blockEntity instanceof SculkShriekerBlockEntity ||
+                blockEntity instanceof SculkCatalystBlockEntity) {
+            tte.tick();
+            return;
         }
-        if (isLocking && BlockEntityLists.teWhiteList.contains(tte.getClass())) {
-            isLocking = false;
+
+        int chunkX = blockEntity.getPos().getX() >> 4;
+        int chunkZ = blockEntity.getPos().getZ() >> 4;
+
+        ThreadedChunksRange matchingRange = findMatchingRange(chunkX, chunkZ);
+        if (matchingRange == null) {
+            // Not inside any ThreadedChunksRange, execute on main thread
+            tte.tick();
+            return;
         }
-        if (tte instanceof PistonBlockEntity) {
-            isLocking = true;
-        }
-        return isLocking;
+
+        ExecutorService executor = matchingRange.getBlockEntityTickExecutor();
+        sharedPhasers.get(world).register();
+        executor.execute(() -> {
+            try {
+                tte.tick();
+            } finally {
+                sharedPhasers.get(world).arriveAndDeregister();
+            }
+        });
     }
 
     public static void postBlockEntityTick(ServerWorld world) {
