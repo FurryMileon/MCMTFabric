@@ -2,24 +2,21 @@ package net.himeki.mcmtfabric.parallelised;
 
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ThreadFactory;
 
 import me.shedaniel.autoconfig.ConfigData;
 import me.shedaniel.autoconfig.annotation.ConfigEntry;
 
 public class ThreadedChunksRange implements ConfigData {
-    String name;
+    private String name;
     public int x1, z1, x2, z2;
     public boolean multiThreadChunkTick = false;
     public boolean multiThreadEntityTick = false;
     public boolean multiThreadBlockEntityTick = false;
-    public String worldId; // Store world identifier
+    public String worldId;
 
     @ConfigEntry.Gui.Excluded
-    private transient ExecutorService chunkTickExecutor;
-    @ConfigEntry.Gui.Excluded
-    private transient ExecutorService entityTickExecutor;
-    @ConfigEntry.Gui.Excluded
-    private transient ExecutorService blockEntityTickExecutor;
+    private transient ExecutorService singleThreadExecutor;
 
     public ThreadedChunksRange() {
         // Default constructor required for serialization
@@ -34,8 +31,47 @@ public class ThreadedChunksRange implements ConfigData {
         this.z2 = Math.max(z1, z2);
     }
 
+    private ThreadFactory createNamedVirtualThreadFactory() {
+        return Thread.ofVirtual()
+                .name("Range-" + name + "-VirtualThread-", 0)
+                .factory();
+    }
+
+    private ThreadFactory createNamedPlatformThreadFactory() {
+        return Thread.ofPlatform()
+                .name("Range-" + name + "-PlatformThread-", 0)
+                .factory();
+    }
+
+    private ExecutorService getSingleThreadExecutor() {
+        if (singleThreadExecutor == null) {
+            // Create a single-threaded executor with your custom virtual thread factory
+//            singleThreadExecutor = Executors.newSingleThreadExecutor(createNamedVirtualThreadFactory());
+            singleThreadExecutor = Executors.newSingleThreadExecutor(createNamedPlatformThreadFactory());
+        }
+        return singleThreadExecutor;
+    }
+
     public boolean contains(String worldId, int x, int z) {
         return this.worldId.equals(worldId) && x >= x1 && x <= x2 && z >= z1 && z <= z2;
+    }
+
+    public ExecutorService getChunkTickExecutor() {
+        return multiThreadChunkTick ?
+                SharedThreadPools.getSharedChunkTickPool() :
+                getSingleThreadExecutor();
+    }
+
+    public ExecutorService getEntityTickExecutor() {
+        return multiThreadEntityTick ?
+                SharedThreadPools.getSharedEntityTickPool() :
+                getSingleThreadExecutor();
+    }
+
+    public ExecutorService getBlockEntityTickExecutor() {
+        return multiThreadBlockEntityTick ?
+                SharedThreadPools.getSharedBlockEntityTickPool() :
+                getSingleThreadExecutor();
     }
 
     public boolean isMultiThreadChunkTick() {
@@ -43,13 +79,7 @@ public class ThreadedChunksRange implements ConfigData {
     }
 
     public void setMultiThreadChunkTick(boolean value) {
-        if (this.multiThreadChunkTick != value) {
-            this.multiThreadChunkTick = value;
-            if (chunkTickExecutor != null) {
-                chunkTickExecutor.shutdown();
-                chunkTickExecutor = null;
-            }
-        }
+        this.multiThreadChunkTick = value;
     }
 
     public boolean isMultiThreadEntityTick() {
@@ -57,13 +87,7 @@ public class ThreadedChunksRange implements ConfigData {
     }
 
     public void setMultiThreadEntityTick(boolean value) {
-        if (this.multiThreadEntityTick != value) {
-            this.multiThreadEntityTick = value;
-            if (entityTickExecutor != null) {
-                entityTickExecutor.shutdown();
-                entityTickExecutor = null;
-            }
-        }
+        this.multiThreadEntityTick = value;
     }
 
     public boolean isMultiThreadBlockEntityTick() {
@@ -71,63 +95,17 @@ public class ThreadedChunksRange implements ConfigData {
     }
 
     public void setMultiThreadBlockEntityTick(boolean value) {
-        if (this.multiThreadBlockEntityTick != value) {
-            this.multiThreadBlockEntityTick = value;
-            if (blockEntityTickExecutor != null) {
-                blockEntityTickExecutor.shutdown();
-                blockEntityTickExecutor = null;
-            }
-        }
-    }
-
-    public ExecutorService getChunkTickExecutor() {
-        if (chunkTickExecutor == null) {
-            if (multiThreadChunkTick) {
-                chunkTickExecutor = Executors.newFixedThreadPool(Runtime.getRuntime().availableProcessors());
-            } else {
-                chunkTickExecutor = Executors.newSingleThreadExecutor();
-            }
-        }
-        return chunkTickExecutor;
-    }
-
-    public ExecutorService getEntityTickExecutor() {
-        if (entityTickExecutor == null) {
-            if (multiThreadEntityTick) {
-                entityTickExecutor = Executors.newFixedThreadPool(Runtime.getRuntime().availableProcessors());
-            } else {
-                entityTickExecutor = Executors.newSingleThreadExecutor();
-            }
-        }
-        return entityTickExecutor;
-    }
-
-    public ExecutorService getBlockEntityTickExecutor() {
-        if (blockEntityTickExecutor == null) {
-            if (multiThreadBlockEntityTick) {
-                blockEntityTickExecutor = Executors.newFixedThreadPool(Runtime.getRuntime().availableProcessors());
-            } else {
-                blockEntityTickExecutor = Executors.newSingleThreadExecutor();
-            }
-        }
-        return blockEntityTickExecutor;
+        this.multiThreadBlockEntityTick = value;
     }
 
     public void shutdownExecutors() {
-        if (chunkTickExecutor != null) {
-            chunkTickExecutor.shutdown();
-            chunkTickExecutor = null;
-        }
-        if (entityTickExecutor != null) {
-            entityTickExecutor.shutdown();
-            entityTickExecutor = null;
-        }
-        if (blockEntityTickExecutor != null) {
-            blockEntityTickExecutor.shutdown();
-            blockEntityTickExecutor = null;
+        if (singleThreadExecutor != null) {
+            singleThreadExecutor.shutdown();
+            singleThreadExecutor = null;
         }
     }
 
+    // Getters remain the same
     public String getName() {
         return name;
     }

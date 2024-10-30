@@ -3,6 +3,7 @@ package net.himeki.mcmtfabric;
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
 import net.himeki.mcmtfabric.config.GeneralConfig;
+import net.himeki.mcmtfabric.parallelised.SharedThreadPools;
 import net.himeki.mcmtfabric.parallelised.ThreadedChunksRange;
 import net.himeki.mcmtfabric.serdes.pools.PostExecutePool;
 import net.minecraft.block.entity.*;
@@ -10,7 +11,6 @@ import net.minecraft.entity.Entity;
 import net.minecraft.entity.FallingBlockEntity;
 import net.minecraft.entity.TntEntity;
 import net.minecraft.entity.passive.AllayEntity;
-import net.minecraft.entity.player.PlayerEntity;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.world.ServerWorld;
 import net.minecraft.util.math.ChunkPos;
@@ -103,6 +103,8 @@ public class ParallelProcessor {
     }
 
     public static void setupThreadPool(int parallelism) {
+        SharedThreadPools.getSharedTickPool();
+
         AtomicInteger worldPoolThreadID = new AtomicInteger();
         final ClassLoader cl = MCMT.class.getClassLoader();
         ForkJoinPool.ForkJoinWorkerThreadFactory worldThreadFactory = p -> {
@@ -265,7 +267,7 @@ public class ParallelProcessor {
             tickConsumer.accept(entityIn);
             return;
         }
-        if (entityIn instanceof PlayerEntity || entityIn instanceof FallingBlockEntity ||
+        if (entityIn instanceof FallingBlockEntity ||
                 entityIn instanceof AllayEntity || entityIn instanceof TntEntity) {
             tickConsumer.accept(entityIn);
             return;
@@ -316,8 +318,7 @@ public class ParallelProcessor {
         }
 
         BlockEntity blockEntity = ((WorldChunk.DirectBlockEntityTickInvoker<?>) wrappedInvoker.wrapped).blockEntity;
-        if (blockEntity instanceof PistonBlockEntity ||
-                blockEntity instanceof SculkSensorBlockEntity ||
+        if (blockEntity instanceof SculkSensorBlockEntity ||
                 blockEntity instanceof SculkShriekerBlockEntity ||
                 blockEntity instanceof SculkCatalystBlockEntity) {
             tte.tick();

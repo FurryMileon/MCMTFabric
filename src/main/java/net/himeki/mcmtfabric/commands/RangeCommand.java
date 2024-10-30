@@ -79,7 +79,13 @@ public class RangeCommand {
                 .then(literal("remove")
                         .then(argument("name", StringArgumentType.word())
                                 .suggests((context, builder) -> suggestRangeNames(context.getSource(), builder))
-                                .executes(RangeCommand::executeRemove)));
+                                .executes(RangeCommand::executeRemove)))
+                .then(literal("list")
+                        .executes(RangeCommand::executeListCompact))
+                .then(literal("show")
+                        .then(argument("name", StringArgumentType.word())
+                                .suggests((context, builder) -> suggestRangeNames(context.getSource(), builder))
+                                .executes(RangeCommand::executeShow)));
     }
 
     /**
@@ -185,10 +191,10 @@ public class RangeCommand {
         RegistryKey<World> worldKey = RegistryKeyArgumentType.getKey(cmdCtx, "world", RegistryKeys.WORLD, INVALID_WORLD_EXCEPTION);
         String worldId = worldKey.getValue().toString();
 
-        int x1 = centerX - radius;
-        int z1 = centerZ - radius;
-        int x2 = centerX + radius;
-        int z2 = centerZ + radius;
+        int x1 = centerX - (radius - 1);
+        int z1 = centerZ - (radius - 1);
+        int x2 = centerX + (radius - 1);
+        int z2 = centerZ + (radius - 1);
 
         String name = providedName != null ? providedName :
                 String.format("chunk_%s_%d_%d_to_%d_%d", worldKey.getValue().getPath(), x1, z1, x2, z2);
@@ -280,6 +286,117 @@ public class RangeCommand {
         String message = String.format("Set %s to %s for range '%s'", tickType, enabled, name);
         cmdCtx.getSource().sendFeedback(() -> Text.literal(message), true);
         return 1;
+    }
+
+    private static int executeListCompact(CommandContext<ServerCommandSource> cmdCtx) {
+        ThreadedRangesConfig rangesConfig = AutoConfig.getConfigHolder(ThreadedRangesConfig.class).getConfig();
+
+        if (rangesConfig.threadedRanges == null || rangesConfig.threadedRanges.isEmpty()) {
+            cmdCtx.getSource().sendFeedback(() -> Text.literal("No threaded ranges configured."), false);
+            return 0;
+        }
+
+        cmdCtx.getSource().sendFeedback(() -> Text.literal("=== Ranges | C: ChunkTick, E: EntityTick, B: BlockEntityTick ==="), false);
+
+        for (ThreadedChunksRange range : rangesConfig.threadedRanges) {
+            // Extract world path from full ID (e.g., "minecraft:overworld" -> "overworld")
+            String worldPath = range.getWorldId().substring(range.getWorldId().lastIndexOf(':') + 1);
+
+            String rangeInfo = String.format(
+                    "§6%s§r %s (%d,%d)->(%d,%d) [%s %s %s]",
+                    range.getName(),
+                    worldPath,
+                    range.getX1(), range.getZ1(),
+                    range.getX2(), range.getZ2(),
+                    formatEnabledCompact(range.isMultiThreadChunkTick(), 'C'),
+                    formatEnabledCompact(range.isMultiThreadEntityTick(), 'E'),
+                    formatEnabledCompact(range.isMultiThreadBlockEntityTick(), 'B')
+            );
+
+            cmdCtx.getSource().sendFeedback(() -> Text.literal(rangeInfo), false);
+        }
+
+        return 1;
+    }
+
+    private static int executeList(CommandContext<ServerCommandSource> cmdCtx) {
+        ThreadedRangesConfig rangesConfig = AutoConfig.getConfigHolder(ThreadedRangesConfig.class).getConfig();
+
+        if (rangesConfig.threadedRanges == null || rangesConfig.threadedRanges.isEmpty()) {
+            cmdCtx.getSource().sendFeedback(() -> Text.literal("No threaded ranges configured."), false);
+            return 0;
+        }
+
+        cmdCtx.getSource().sendFeedback(() -> Text.literal("=== Configured Ranges ==="), false);
+
+        for (ThreadedChunksRange range : rangesConfig.threadedRanges) {
+            String rangeInfo = String.format(
+                    "§6%s§r: %s (%d, %d) to (%d, %d)\n" +
+                            "   §7Chunk tick: %s, Entity tick: %s, Block Entity tick: %s§r",
+                    range.getName(),
+                    range.getWorldId(),
+                    range.getX1(), range.getZ1(),
+                    range.getX2(), range.getZ2(),
+                    formatEnabled(range.isMultiThreadChunkTick()),
+                    formatEnabled(range.isMultiThreadEntityTick()),
+                    formatEnabled(range.isMultiThreadBlockEntityTick())
+            );
+
+            cmdCtx.getSource().sendFeedback(() -> Text.literal(rangeInfo), false);
+        }
+
+        return 1;
+    }
+
+    private static int executeShow(CommandContext<ServerCommandSource> cmdCtx) {
+        String name = StringArgumentType.getString(cmdCtx, "name");
+        ThreadedRangesConfig rangesConfig = AutoConfig.getConfigHolder(ThreadedRangesConfig.class).getConfig();
+
+        ThreadedChunksRange targetRange = null;
+        if (rangesConfig.threadedRanges != null) {
+            for (ThreadedChunksRange range : rangesConfig.threadedRanges) {
+                if (range.getName().equals(name)) {
+                    targetRange = range;
+                    break;
+                }
+            }
+        }
+
+        if (targetRange == null) {
+            cmdCtx.getSource().sendError(Text.literal("No range found with name: " + name));
+            return 0;
+        }
+
+        int width = Math.abs(targetRange.getX2() - targetRange.getX1()) + 1;
+        int length = Math.abs(targetRange.getZ2() - targetRange.getZ1()) + 1;
+        int area = width * length;
+
+        String[] details = {
+                String.format("§6=== Range Details: %s ===§r", targetRange.getName()),
+                String.format("World: %s", targetRange.getWorldId()),
+                String.format("Coordinates: (%d, %d) to (%d, %d)",
+                        targetRange.getX1(), targetRange.getZ1(),
+                        targetRange.getX2(), targetRange.getZ2()),
+                String.format("Dimensions: %dx%d chunks (%d total)", width, length, area),
+                "Settings:",
+                String.format("  - Chunk tick: %s", formatEnabled(targetRange.isMultiThreadChunkTick())),
+                String.format("  - Entity tick: %s", formatEnabled(targetRange.isMultiThreadEntityTick())),
+                String.format("  - Block Entity tick: %s", formatEnabled(targetRange.isMultiThreadBlockEntityTick()))
+        };
+
+        for (String detail : details) {
+            cmdCtx.getSource().sendFeedback(() -> Text.literal(detail), false);
+        }
+
+        return 1;
+    }
+
+    private static String formatEnabled(boolean enabled) {
+        return enabled ? "§aenabled§r" : "§cdisabled§r";
+    }
+
+    private static String formatEnabledCompact(boolean enabled, char letter) {
+        return enabled ? "§a" + letter + "§r" : "§c" + letter + "§r";
     }
 
     private static CompletableFuture<Suggestions> suggestChunkCoordinate(ServerCommandSource source, SuggestionsBuilder builder, boolean isX) {

@@ -10,9 +10,18 @@ import net.himeki.mcmtfabric.commands.ConfigCommand;
 import net.himeki.mcmtfabric.commands.StatsCommand;
 import net.himeki.mcmtfabric.config.GeneralConfig;
 import net.himeki.mcmtfabric.config.ThreadedRangesConfig;
+import net.himeki.mcmtfabric.debug.MSPT10DebugBlock;
+import net.himeki.mcmtfabric.debug.MSPT10DebugBlockEntity;
 import net.himeki.mcmtfabric.jmx.JMXRegistration;
 import net.himeki.mcmtfabric.serdes.SerDesRegistry;
+import net.minecraft.block.AbstractBlock;
+import net.minecraft.block.entity.BlockEntityType;
+import net.minecraft.item.BlockItem;
+import net.minecraft.item.Item;
+import net.minecraft.registry.Registries;
+import net.minecraft.registry.Registry;
 import net.minecraft.util.ActionResult;
+import net.minecraft.util.Identifier;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
@@ -21,6 +30,25 @@ public class MCMT implements ModInitializer {
     public static GeneralConfig config;
     public static ThreadedRangesConfig threadedRangesConfig;
 
+    public static final MSPT10DebugBlock MSPT10_DEBUG_BLOCK = Registry.register(
+            Registries.BLOCK,
+            Identifier.of("mcmtfabric", "mspt10_debug_block"),
+            new MSPT10DebugBlock(AbstractBlock.Settings.create())
+    );
+
+    // Register the block entity type
+    public static final BlockEntityType<MSPT10DebugBlockEntity> MSPT10_DEBUG_BLOCK_ENTITY = Registry.register(
+            Registries.BLOCK_ENTITY_TYPE,
+            Identifier.of("mcmtfabric", "mspt10_debug_block"),
+            BlockEntityType.Builder.create(MSPT10DebugBlockEntity::new, MSPT10_DEBUG_BLOCK).build()
+    );
+
+    public static final BlockItem MSPT10DebugITEM = Registry.register(
+            Registries.ITEM,
+            Identifier.of("mcmtfabric", "mspt10_debug_block"),
+            new BlockItem(MSPT10_DEBUG_BLOCK, new Item.Settings())
+    );
+    
     @Override
     public void onInitialize() {
         // This code runs as soon as Minecraft is in a mod-load-ready state.

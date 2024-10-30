@@ -16,14 +16,14 @@ import java.util.concurrent.CopyOnWriteArrayList;
 @Mixin(ChainRestrictedNeighborUpdater.class)
 public abstract class ChainRestrictedNeighborUpdaterMixin implements NeighborUpdater {
 
-    @Shadow
-    @Final
-    @Mutable
-    List<ChainRestrictedNeighborUpdater.Entry> pending = new CopyOnWriteArrayList<>();
-
-    @WrapMethod(method = "enqueue")
-    private synchronized void syncEnqueue(BlockPos pos, ChainRestrictedNeighborUpdater.Entry entry, Operation<Void> original) {
-        original.call(pos, entry);
-    }
+//    @Shadow
+//    @Final
+//    @Mutable
+//    List<ChainRestrictedNeighborUpdater.Entry> pending = new CopyOnWriteArrayList<>();
+//
+//    @WrapMethod(method = "enqueue")
+//    private synchronized void syncEnqueue(BlockPos pos, ChainRestrictedNeighborUpdater.Entry entry, Operation<Void> original) {
+//        original.call(pos, entry);
+//    }
 
 }
