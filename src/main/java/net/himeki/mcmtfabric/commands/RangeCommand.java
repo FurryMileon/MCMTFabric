@@ -149,12 +149,10 @@ public class RangeCommand {
 
         // Check if range exists
         ThreadedChunksRange targetRange = null;
-        if (rangesConfig.threadedRanges != null) {
-            for (ThreadedChunksRange range : rangesConfig.threadedRanges) {
-                if (range.getName().equals(name)) {
-                    targetRange = range;
-                    break;
-                }
+        for (ThreadedChunksRange range : ParallelProcessor.threadedChunksRanges) {
+            if (range.getName().equals(name)) {
+                targetRange = range;
+                break;
             }
         }
 
@@ -167,7 +165,8 @@ public class RangeCommand {
         ParallelProcessor.removeThreadedChunksRangeByName(name);
 
         // Then remove from config
-        removeRangeFromConfig(name);
+        if (targetRange.getSource().equals("config"))
+            removeRangeFromConfig(name);
 
         String message = String.format("Removed threaded range '%s'", name);
         cmdCtx.getSource().sendFeedback(() -> Text.literal(message), true);
@@ -369,7 +368,15 @@ public class RangeCommand {
 
         int width = Math.abs(targetRange.getX2() - targetRange.getX1()) + 1;
         int length = Math.abs(targetRange.getZ2() - targetRange.getZ1()) + 1;
-        int area = width * length;
+
+        // Calculate center coordinates
+        int centerX = (targetRange.getX1() + targetRange.getX2()) / 2;
+        int centerZ = (targetRange.getZ1() + targetRange.getZ2()) / 2;
+
+        // Calculate radius (if it's a square range)
+        int radiusX = (targetRange.getX2() - targetRange.getX1()) / 2;
+        int radiusZ = (targetRange.getZ2() - targetRange.getZ1()) / 2;
+        boolean isSquare = radiusX == radiusZ;
 
         String[] details = {
                 String.format("§6=== Range Details: %s ===§r", targetRange.getName()),
@@ -377,7 +384,10 @@ public class RangeCommand {
                 String.format("Coordinates: (%d, %d) to (%d, %d)",
                         targetRange.getX1(), targetRange.getZ1(),
                         targetRange.getX2(), targetRange.getZ2()),
-                String.format("Dimensions: %dx%d chunks (%d total)", width, length, area),
+                String.format("Center: (%d, %d)%s",
+                        centerX, centerZ,
+                        isSquare ? String.format(" (radius: %d chunks)", radiusX + 1) : ""),
+                String.format("Dimensions: %dx%d chunks (%d total)", width, length, width * length),
                 "Settings:",
                 String.format("  - Chunk tick: %s", formatEnabled(targetRange.isMultiThreadChunkTick())),
                 String.format("  - Entity tick: %s", formatEnabled(targetRange.isMultiThreadEntityTick())),

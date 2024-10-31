@@ -22,17 +22,26 @@ public class ThreadedChunksRange implements ConfigData {
     @ConfigEntry.Gui.Excluded
     private transient int assignedCpuCore = -1;
 
+    @ConfigEntry.Gui.Excluded
+    private transient String source;
+
     public ThreadedChunksRange() {
         // Default constructor required for serialization
+        this.source = "config"; // Default source
     }
 
     public ThreadedChunksRange(String name, String worldId, int x1, int z1, int x2, int z2) {
+        this(name, worldId, x1, z1, x2, z2, "config");
+    }
+
+    public ThreadedChunksRange(String name, String worldId, int x1, int z1, int x2, int z2, String source) {
         this.name = name;
         this.worldId = worldId;
         this.x1 = Math.min(x1, x2);
         this.z1 = Math.min(z1, z2);
         this.x2 = Math.max(x1, x2);
         this.z2 = Math.max(z1, z2);
+        this.source = source;
     }
 
     private ThreadFactory createNamedVirtualThreadFactory() {
@@ -159,5 +168,20 @@ public class ThreadedChunksRange implements ConfigData {
 
     public int getZ2() {
         return z2;
+    }
+
+    public String getSource() {
+        return source != null ? source : "config"; // Fallback to "config" if null
+    }
+
+    public void setSource(String source) {
+        this.source = source;
+    }
+
+    public long getArea() {
+        // Calculate area of the range in chunks
+        long width = Math.abs((long) x2 - x1) + 1;
+        long height = Math.abs((long) z2 - z1) + 1;
+        return width * height;
     }
 }

@@ -41,7 +41,7 @@ public class ParallelProcessor {
     static Map<String, Set<Thread>> mcThreadTracker = new ConcurrentHashMap<String, Set<Thread>>();
 
     // List of ThreadedChunksRange
-    private static List<ThreadedChunksRange> threadedChunksRanges = new ArrayList<>();
+    public static final List<ThreadedChunksRange> threadedChunksRanges = new ArrayList<>();
 
     private static final Cache<ChunkPos, ThreadedChunksRange> chunkRangeCache = Caffeine.newBuilder()
             .maximumSize(1000)
@@ -92,12 +92,16 @@ public class ParallelProcessor {
         return chunkRangeCache.get(pos, key -> {
             synchronized (threadedChunksRanges) {
                 String worldId = world.getRegistryKey().getValue().toString();
-                for (ThreadedChunksRange range : threadedChunksRanges) {
-                    if (range.contains(worldId, chunkX, chunkZ)) {
-                        return range;
-                    }
-                }
-                return null;
+
+                // Single stream operation to find the smallest matching range
+                return threadedChunksRanges.stream()
+                        .filter(range -> range.contains(worldId, chunkX, chunkZ))
+                        .min((r1, r2) -> {
+                            long area1 = r1.getArea();
+                            long area2 = r2.getArea();
+                            return Long.compare(area1, area2);
+                        })
+                        .orElse(null);
             }
         });
     }

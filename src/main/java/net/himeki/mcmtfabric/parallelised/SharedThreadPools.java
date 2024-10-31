@@ -51,8 +51,18 @@ public class SharedThreadPools {
             int usedCores = CPUCoreManager.getUsedCoreCount();
             int availableCores = Math.max(1, totalCores - usedCores);
 
-            sharedTickPool.setCorePoolSize(availableCores);
-            sharedTickPool.setMaximumPoolSize(availableCores);
+            int currentCorePoolSize = sharedTickPool.getCorePoolSize();
+            int currentMaximumPoolSize = sharedTickPool.getMaximumPoolSize();
+
+            if (availableCores > currentMaximumPoolSize) {
+                // **Increasing** pool size
+                sharedTickPool.setMaximumPoolSize(availableCores);
+                sharedTickPool.setCorePoolSize(availableCores);
+            } else {
+                // **Decreasing** pool size
+                sharedTickPool.setCorePoolSize(availableCores);
+                sharedTickPool.setMaximumPoolSize(availableCores);
+            }
         }
     }
 
