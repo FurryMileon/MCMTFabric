@@ -30,31 +30,46 @@ public class MCMT implements ModInitializer {
     public static GeneralConfig config;
     public static ThreadedRangesConfig threadedRangesConfig;
 
-    public static final MSPT10DebugBlock MSPT10_DEBUG_BLOCK = Registry.register(
-            Registries.BLOCK,
-            Identifier.of("mcmtfabric", "mspt10_debug_block"),
-            new MSPT10DebugBlock(AbstractBlock.Settings.create())
-    );
+    // Declare these as fields but don't initialize them immediately
+    public static MSPT10DebugBlock MSPT10_DEBUG_BLOCK;
+    public static BlockEntityType<MSPT10DebugBlockEntity> MSPT10_DEBUG_BLOCK_ENTITY;
+    public static BlockItem MSPT10DebugITEM;
 
-    // Register the block entity type
-    public static final BlockEntityType<MSPT10DebugBlockEntity> MSPT10_DEBUG_BLOCK_ENTITY = Registry.register(
-            Registries.BLOCK_ENTITY_TYPE,
-            Identifier.of("mcmtfabric", "mspt10_debug_block"),
-            BlockEntityType.Builder.create(MSPT10DebugBlockEntity::new, MSPT10_DEBUG_BLOCK).build()
-    );
+    private void registerDebugBlocks() {
+        if (System.getenv("MCMT_ENABLE_DEBUG") != null) {
+            LOGGER.info("Debug mode enabled, registering debug blocks...");
 
-    public static final BlockItem MSPT10DebugITEM = Registry.register(
-            Registries.ITEM,
-            Identifier.of("mcmtfabric", "mspt10_debug_block"),
-            new BlockItem(MSPT10_DEBUG_BLOCK, new Item.Settings())
-    );
-    
+            MSPT10_DEBUG_BLOCK = Registry.register(
+                    Registries.BLOCK,
+                    Identifier.of("mcmtfabric", "mspt10_debug_block"),
+                    new MSPT10DebugBlock(AbstractBlock.Settings.create())
+            );
+
+            MSPT10_DEBUG_BLOCK_ENTITY = Registry.register(
+                    Registries.BLOCK_ENTITY_TYPE,
+                    Identifier.of("mcmtfabric", "mspt10_debug_block"),
+                    BlockEntityType.Builder.create(MSPT10DebugBlockEntity::new, MSPT10_DEBUG_BLOCK).build()
+            );
+
+            MSPT10DebugITEM = Registry.register(
+                    Registries.ITEM,
+                    Identifier.of("mcmtfabric", "mspt10_debug_block"),
+                    new BlockItem(MSPT10_DEBUG_BLOCK, new Item.Settings())
+            );
+
+            LOGGER.info("Debug blocks registered successfully");
+        } else {
+            LOGGER.info("Debug mode disabled, skipping debug block registration");
+        }
+    }
+
     @Override
     public void onInitialize() {
-        // This code runs as soon as Minecraft is in a mod-load-ready state.
-        // However, some things (like resources) may still be uninitialized.
-        // Proceed with mild caution.
         LOGGER.info("Initializing MCMTFabric...");
+
+        // Register debug blocks based on environment variable
+        registerDebugBlocks();
+
         ConfigHolder<GeneralConfig> holder = AutoConfig.register(GeneralConfig.class, Toml4jConfigSerializer::new);
         holder.registerLoadListener((manager, data) -> {
             holder.getConfig().loadTELists();
@@ -75,14 +90,11 @@ public class MCMT implements ModInitializer {
         StatsCommand.runDataThread();
         SerDesRegistry.init();
 
-
         LOGGER.info("MCMT Setting up threadpool...");
         ParallelProcessor.setupThreadPool(GeneralConfig.getParallelism());
-
 
         // Listener reg begin
         ServerLifecycleEvents.SERVER_STARTED.register(server -> StatsCommand.resetAll());
         CommandRegistrationCallback.EVENT.register((dispatcher, registryAccess, environment) -> ConfigCommand.register(dispatcher));
-
     }
 }

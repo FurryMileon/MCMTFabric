@@ -1,7 +1,6 @@
 package net.himeki.mcmtfabric.parallelised;
 
 import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.LinkedBlockingQueue;
@@ -12,7 +11,7 @@ public class SharedThreadPools {
     private static final int THREAD_COUNT = Math.max(1, Runtime.getRuntime().availableProcessors() - 1);
 
     // Single shared thread pool for all tick operations
-    private static ExecutorService sharedTickPool;
+    private static ThreadPoolExecutor sharedTickPool;
 
     private static ThreadFactory createNamedThreadFactory(String prefix) {
         return new ThreadFactory() {
@@ -29,20 +28,32 @@ public class SharedThreadPools {
 
     public static synchronized ExecutorService getSharedTickPool() {
         if (sharedTickPool == null || sharedTickPool.isShutdown()) {
-            // Create a thread pool with:
-            // - Fixed number of core threads (THREAD_COUNT)
-            // - Unbounded queue to prevent task rejection
-            // - Named threads for better debugging
+            int totalCores = Math.max(1, Runtime.getRuntime().availableProcessors() - 2);
+            int usedCores = CPUCoreManager.getUsedCoreCount();
+            int availableCores = Math.max(1, totalCores - usedCores);
+
             sharedTickPool = new ThreadPoolExecutor(
-                    THREAD_COUNT,
-                    THREAD_COUNT,
+                    availableCores,
+                    availableCores,
                     60L, TimeUnit.SECONDS,
                     new LinkedBlockingQueue<>(),
                     createNamedThreadFactory("MCMT-SharedTick"),
-                    new ThreadPoolExecutor.CallerRunsPolicy() // If queue is full, run task in caller's thread
+                    new ThreadPoolExecutor.CallerRunsPolicy()
             );
         }
         return sharedTickPool;
+    }
+
+    // Call this method whenever the number of used cores changes
+    public static synchronized void adjustSharedPoolSize() {
+        if (sharedTickPool != null && !sharedTickPool.isShutdown()) {
+            int totalCores = Math.max(1, Runtime.getRuntime().availableProcessors() - 2);
+            int usedCores = CPUCoreManager.getUsedCoreCount();
+            int availableCores = Math.max(1, totalCores - usedCores);
+
+            sharedTickPool.setCorePoolSize(availableCores);
+            sharedTickPool.setMaximumPoolSize(availableCores);
+        }
     }
 
     // These methods now all return the same shared pool

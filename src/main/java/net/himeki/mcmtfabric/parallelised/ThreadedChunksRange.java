@@ -6,6 +6,7 @@ import java.util.concurrent.ThreadFactory;
 
 import me.shedaniel.autoconfig.ConfigData;
 import me.shedaniel.autoconfig.annotation.ConfigEntry;
+import net.openhft.affinity.AffinityLock;
 
 public class ThreadedChunksRange implements ConfigData {
     private String name;
@@ -17,6 +18,9 @@ public class ThreadedChunksRange implements ConfigData {
 
     @ConfigEntry.Gui.Excluded
     private transient ExecutorService singleThreadExecutor;
+
+    @ConfigEntry.Gui.Excluded
+    private transient int assignedCpuCore = -1;
 
     public ThreadedChunksRange() {
         // Default constructor required for serialization
@@ -43,11 +47,33 @@ public class ThreadedChunksRange implements ConfigData {
                 .factory();
     }
 
-    private ExecutorService getSingleThreadExecutor() {
+    private ThreadFactory createNamedPlatformAffinityThreadFactory() {
+        return runnable -> {
+            int cpuCore = CPUCoreManager.acquireCore();
+            if (cpuCore == -1) {
+                throw new RuntimeException("No available CPU cores for thread affinity");
+            }
+            assignedCpuCore = cpuCore;
+            SharedThreadPools.adjustSharedPoolSize();
+
+            Thread thread = new Thread(() -> {
+                try (AffinityLock al = AffinityLock.acquireLock(cpuCore)) {
+                    runnable.run();
+                } finally {
+                    // Release the core when the executor is shutting down
+                }
+            }, "Range-" + name + "-PlatformThread");
+
+            thread.setDaemon(true);
+            return thread;
+        };
+    }
+
+    public ExecutorService getSingleThreadExecutor() {
         if (singleThreadExecutor == null) {
             // Create a single-threaded executor with your custom virtual thread factory
 //            singleThreadExecutor = Executors.newSingleThreadExecutor(createNamedVirtualThreadFactory());
-            singleThreadExecutor = Executors.newSingleThreadExecutor(createNamedPlatformThreadFactory());
+            singleThreadExecutor = Executors.newSingleThreadExecutor(createNamedPlatformAffinityThreadFactory());
         }
         return singleThreadExecutor;
     }
@@ -102,6 +128,11 @@ public class ThreadedChunksRange implements ConfigData {
         if (singleThreadExecutor != null) {
             singleThreadExecutor.shutdown();
             singleThreadExecutor = null;
+            if (assignedCpuCore != -1) {
+                CPUCoreManager.releaseCore(assignedCpuCore);
+                assignedCpuCore = -1;
+                SharedThreadPools.adjustSharedPoolSize();
+            }
         }
     }
 

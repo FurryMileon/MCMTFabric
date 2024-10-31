@@ -267,11 +267,6 @@ public class ParallelProcessor {
             tickConsumer.accept(entityIn);
             return;
         }
-        if (entityIn instanceof FallingBlockEntity ||
-                entityIn instanceof AllayEntity || entityIn instanceof TntEntity) {
-            tickConsumer.accept(entityIn);
-            return;
-        }
 
         int chunkX = entityIn.getChunkPos().x;
         int chunkZ = entityIn.getChunkPos().z;
@@ -282,7 +277,11 @@ public class ParallelProcessor {
             return;
         }
 
-        ExecutorService executor = matchingRange.getEntityTickExecutor();
+        // Choose executor based on entity type
+        ExecutorService executor = shouldUseSingleThread(entityIn) ?
+                matchingRange.getSingleThreadExecutor() :
+                matchingRange.getEntityTickExecutor();
+
         sharedPhasers.get(serverworld).register();
         executor.execute(() -> {
             try {
@@ -291,6 +290,12 @@ public class ParallelProcessor {
                 sharedPhasers.get(serverworld).arriveAndDeregister();
             }
         });
+    }
+
+    private static boolean shouldUseSingleThread(Entity entity) {
+        return entity instanceof FallingBlockEntity ||
+                entity instanceof AllayEntity ||
+                entity instanceof TntEntity;
     }
 
     public static void postEntityTick(ServerWorld world) {
@@ -306,36 +311,31 @@ public class ParallelProcessor {
     }
 
     public static void callBlockEntityTick(BlockEntityTickInvoker tte, World world) {
-        if (!(world instanceof ServerWorld) || !(tte instanceof WorldChunk.WrappedBlockEntityTickInvoker)) {
+        if (!(world instanceof ServerWorld) || !(tte instanceof WorldChunk.WrappedBlockEntityTickInvoker wrappedInvoker)) {
             tte.tick();
             return;
         }
 
-        WorldChunk.WrappedBlockEntityTickInvoker wrappedInvoker = (WorldChunk.WrappedBlockEntityTickInvoker) tte;
         if (!(wrappedInvoker.wrapped instanceof WorldChunk.DirectBlockEntityTickInvoker<?>)) {
             tte.tick();
             return;
         }
 
         BlockEntity blockEntity = ((WorldChunk.DirectBlockEntityTickInvoker<?>) wrappedInvoker.wrapped).blockEntity;
-        if (blockEntity instanceof SculkSensorBlockEntity ||
-                blockEntity instanceof SculkShriekerBlockEntity ||
-                blockEntity instanceof SculkCatalystBlockEntity) {
-            tte.tick();
-            return;
-        }
-
         int chunkX = blockEntity.getPos().getX() >> 4;
         int chunkZ = blockEntity.getPos().getZ() >> 4;
 
         ThreadedChunksRange matchingRange = findMatchingRange(chunkX, chunkZ, world);
         if (matchingRange == null) {
-            // Not inside any ThreadedChunksRange, execute on main thread
             tte.tick();
             return;
         }
 
-        ExecutorService executor = matchingRange.getBlockEntityTickExecutor();
+        // Choose executor based on block entity type
+        ExecutorService executor = shouldUseSingleThread(blockEntity) ?
+                matchingRange.getSingleThreadExecutor() :
+                matchingRange.getBlockEntityTickExecutor();
+
         sharedPhasers.get(world).register();
         executor.execute(() -> {
             try {
@@ -344,6 +344,13 @@ public class ParallelProcessor {
                 sharedPhasers.get(world).arriveAndDeregister();
             }
         });
+    }
+
+    private static boolean shouldUseSingleThread(BlockEntity blockEntity) {
+        return blockEntity instanceof PistonBlockEntity ||
+                blockEntity instanceof SculkSensorBlockEntity ||
+                blockEntity instanceof SculkShriekerBlockEntity ||
+                blockEntity instanceof SculkCatalystBlockEntity;
     }
 
     public static void postBlockEntityTick(ServerWorld world) {
