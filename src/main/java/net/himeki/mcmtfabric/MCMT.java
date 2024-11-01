@@ -9,7 +9,7 @@ import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
 import net.himeki.mcmtfabric.commands.ConfigCommand;
 import net.himeki.mcmtfabric.commands.StatsCommand;
 import net.himeki.mcmtfabric.config.GeneralConfig;
-import net.himeki.mcmtfabric.config.ThreadedRangesConfig;
+import net.himeki.mcmtfabric.config.ThreadedRegionsConfig;
 import net.himeki.mcmtfabric.debug.MSPT10DebugBlock;
 import net.himeki.mcmtfabric.debug.MSPT10DebugBlockEntity;
 import net.himeki.mcmtfabric.jmx.JMXRegistration;
@@ -28,7 +28,7 @@ import org.apache.logging.log4j.Logger;
 public class MCMT implements ModInitializer {
     public static final Logger LOGGER = LogManager.getLogger();
     public static GeneralConfig config;
-    public static ThreadedRangesConfig threadedRangesConfig;
+    public static ThreadedRegionsConfig threadedRegionsConfig;
 
     // Declare these as fields but don't initialize them immediately
     public static MSPT10DebugBlock MSPT10_DEBUG_BLOCK;
@@ -36,7 +36,7 @@ public class MCMT implements ModInitializer {
     public static BlockItem MSPT10DebugITEM;
 
     private void registerDebugBlocks() {
-        if (System.getenv("MCMT_ENABLE_DEBUG") != null) {
+        if (System.getProperty("MCMT_ENABLE_DEBUG").equals("true")) {
             LOGGER.info("Debug mode enabled, registering debug blocks...");
 
             MSPT10_DEBUG_BLOCK = Registry.register(
@@ -78,10 +78,10 @@ public class MCMT implements ModInitializer {
         holder.load();  // Load again to run loadTELists() handler
         config = holder.getConfig();
 
-        ConfigHolder<ThreadedRangesConfig> trHolder = AutoConfig.register(ThreadedRangesConfig.class, Toml4jConfigSerializer::new);
+        ConfigHolder<ThreadedRegionsConfig> trHolder = AutoConfig.register(ThreadedRegionsConfig.class, Toml4jConfigSerializer::new);
         trHolder.load();
 
-        trHolder.getConfig().threadedRanges.forEach(ParallelProcessor::addThreadedChunksRange);
+        trHolder.getConfig().threadedChunksRegions.forEach(ParallelProcessor::addThreadedChunksRegion);
 
         if (System.getProperty("jmt.mcmt.jmx") != null) {
             JMXRegistration.register();

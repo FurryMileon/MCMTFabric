@@ -23,7 +23,7 @@ public class ConfigCommand {
         LiteralArgumentBuilder<ServerCommandSource> mcmtconfig = literal("mcmt");
         mcmtconfig = mcmtconfig.then(registerConfig(literal("config")));
         mcmtconfig = mcmtconfig.then(DebugCommand.registerDebug(literal("debug")));
-        mcmtconfig = mcmtconfig.then(RangeCommand.registerRange(literal("range")));
+        mcmtconfig = mcmtconfig.then(RegionCommand.registerRegion(literal("region")));
         mcmtconfig = StatsCommand.registerStatus(mcmtconfig);
         dispatcher.register(mcmtconfig);
     }

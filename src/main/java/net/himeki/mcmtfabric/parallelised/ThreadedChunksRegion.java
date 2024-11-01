@@ -6,9 +6,10 @@ import java.util.concurrent.ThreadFactory;
 
 import me.shedaniel.autoconfig.ConfigData;
 import me.shedaniel.autoconfig.annotation.ConfigEntry;
+import net.himeki.mcmtfabric.MCMT;
 import net.openhft.affinity.AffinityLock;
 
-public class ThreadedChunksRange implements ConfigData {
+public class ThreadedChunksRegion implements ConfigData {
     private String name;
     public int x1, z1, x2, z2;
     public boolean multiThreadChunkTick = false;
@@ -25,16 +26,16 @@ public class ThreadedChunksRange implements ConfigData {
     @ConfigEntry.Gui.Excluded
     private transient String source;
 
-    public ThreadedChunksRange() {
+    public ThreadedChunksRegion() {
         // Default constructor required for serialization
         this.source = "config"; // Default source
     }
 
-    public ThreadedChunksRange(String name, String worldId, int x1, int z1, int x2, int z2) {
+    public ThreadedChunksRegion(String name, String worldId, int x1, int z1, int x2, int z2) {
         this(name, worldId, x1, z1, x2, z2, "config");
     }
 
-    public ThreadedChunksRange(String name, String worldId, int x1, int z1, int x2, int z2, String source) {
+    public ThreadedChunksRegion(String name, String worldId, int x1, int z1, int x2, int z2, String source) {
         this.name = name;
         this.worldId = worldId;
         this.x1 = Math.min(x1, x2);
@@ -46,13 +47,13 @@ public class ThreadedChunksRange implements ConfigData {
 
     private ThreadFactory createNamedVirtualThreadFactory() {
         return Thread.ofVirtual()
-                .name("Range-" + name + "-VirtualThread-", 0)
+                .name("Region-" + name + "-VirtualThread-", 0)
                 .factory();
     }
 
     private ThreadFactory createNamedPlatformThreadFactory() {
         return Thread.ofPlatform()
-                .name("Range-" + name + "-PlatformThread-", 0)
+                .name("Region-" + name + "-PlatformThread-", 0)
                 .factory();
     }
 
@@ -71,7 +72,7 @@ public class ThreadedChunksRange implements ConfigData {
                 } finally {
                     // Release the core when the executor is shutting down
                 }
-            }, "Range-" + name + "-PlatformThread");
+            }, "Region-" + name + "-PlatformThread");
 
             thread.setDaemon(true);
             return thread;
@@ -80,9 +81,21 @@ public class ThreadedChunksRange implements ConfigData {
 
     public ExecutorService getSingleThreadExecutor() {
         if (singleThreadExecutor == null) {
-            // Create a single-threaded executor with your custom virtual thread factory
-//            singleThreadExecutor = Executors.newSingleThreadExecutor(createNamedVirtualThreadFactory());
-            singleThreadExecutor = Executors.newSingleThreadExecutor(createNamedPlatformAffinityThreadFactory());
+            String poolType = System.getProperty("MCMT_SINGLE_POOL_TYPE", "platform");
+            switch (poolType) {
+                case "virtual":
+                    singleThreadExecutor = Executors.newSingleThreadExecutor(createNamedVirtualThreadFactory());
+                    break;
+                case "platform":
+                    singleThreadExecutor = Executors.newSingleThreadExecutor(createNamedPlatformThreadFactory());
+                    break;
+                case "affinity":
+                    singleThreadExecutor = Executors.newSingleThreadExecutor(createNamedPlatformAffinityThreadFactory());
+                    break;
+                default:
+                    MCMT.LOGGER.warn("Invalid MCMT_SINGLE_POOL_TYPE: {}. Using default 'platform'.", poolType);
+                    singleThreadExecutor = Executors.newSingleThreadExecutor(createNamedPlatformThreadFactory());
+            }
         }
         return singleThreadExecutor;
     }
@@ -179,7 +192,7 @@ public class ThreadedChunksRange implements ConfigData {
     }
 
     public long getArea() {
-        // Calculate area of the range in chunks
+        // Calculate area of the region in chunks
         long width = Math.abs((long) x2 - x1) + 1;
         long height = Math.abs((long) z2 - z1) + 1;
         return width * height;

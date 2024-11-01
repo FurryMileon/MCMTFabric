@@ -3,8 +3,9 @@ package net.himeki.mcmtfabric;
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
 import net.himeki.mcmtfabric.config.GeneralConfig;
+import net.himeki.mcmtfabric.parallelised.CPUCoreManager;
 import net.himeki.mcmtfabric.parallelised.SharedThreadPools;
-import net.himeki.mcmtfabric.parallelised.ThreadedChunksRange;
+import net.himeki.mcmtfabric.parallelised.ThreadedChunksRegion;
 import net.himeki.mcmtfabric.serdes.pools.PostExecutePool;
 import net.minecraft.block.entity.*;
 import net.minecraft.entity.Entity;
@@ -17,6 +18,7 @@ import net.minecraft.util.math.ChunkPos;
 import net.minecraft.world.World;
 import net.minecraft.world.chunk.BlockEntityTickInvoker;
 import net.minecraft.world.chunk.WorldChunk;
+import net.openhft.affinity.AffinityLock;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
@@ -38,64 +40,68 @@ public class ParallelProcessor {
     static MinecraftServer mcs;
     static AtomicBoolean isTicking = new AtomicBoolean();
 
+    private static final ConcurrentHashMap<ServerWorld, List<Runnable>> delayedChunkTasks = new ConcurrentHashMap<>();
+    private static final ConcurrentHashMap<ServerWorld, List<Runnable>> delayedEntityTasks = new ConcurrentHashMap<>();
+    private static final ConcurrentHashMap<ServerWorld, List<Runnable>> delayedBlockEntityTasks = new ConcurrentHashMap<>();
+
     static Map<String, Set<Thread>> mcThreadTracker = new ConcurrentHashMap<String, Set<Thread>>();
 
-    // List of ThreadedChunksRange
-    public static final List<ThreadedChunksRange> threadedChunksRanges = new ArrayList<>();
+    // List of ThreadedChunksRegion
+    public static final List<ThreadedChunksRegion> threadedChunksRegions = new ArrayList<>();
 
-    private static final Cache<ChunkPos, ThreadedChunksRange> chunkRangeCache = Caffeine.newBuilder()
+    private static final Cache<ChunkPos, ThreadedChunksRegion> chunkRegionCache = Caffeine.newBuilder()
             .maximumSize(1000)
             .build();
 
-    public static void resetThreadedChunksRanges() {
-        synchronized (threadedChunksRanges) {
-            for (ThreadedChunksRange range : threadedChunksRanges) {
-                range.shutdownExecutors();
+    public static void resetThreadedChunksRegions() {
+        synchronized (threadedChunksRegions) {
+            for (ThreadedChunksRegion region : threadedChunksRegions) {
+                region.shutdownExecutors();
             }
-            threadedChunksRanges.clear();
-            chunkRangeCache.invalidateAll(); // Invalidate cache when ranges are reset
+            threadedChunksRegions.clear();
+            chunkRegionCache.invalidateAll(); // Invalidate cache when regions are reset
         }
     }
 
-    public static void addThreadedChunksRange(ThreadedChunksRange range) {
-        synchronized (threadedChunksRanges) {
-            threadedChunksRanges.add(range);
-            chunkRangeCache.invalidateAll(); // Invalidate cache when a new range is added
+    public static void addThreadedChunksRegion(ThreadedChunksRegion region) {
+        synchronized (threadedChunksRegions) {
+            threadedChunksRegions.add(region);
+            chunkRegionCache.invalidateAll(); // Invalidate cache when a new region is added
         }
     }
 
-    public static void removeThreadedChunksRange(ThreadedChunksRange range) {
-        synchronized (threadedChunksRanges) {
-            threadedChunksRanges.remove(range);
-            range.shutdownExecutors();
-            chunkRangeCache.invalidateAll(); // Invalidate cache when a range is removed
+    public static void removeThreadedChunksRegion(ThreadedChunksRegion region) {
+        synchronized (threadedChunksRegions) {
+            threadedChunksRegions.remove(region);
+            region.shutdownExecutors();
+            chunkRegionCache.invalidateAll(); // Invalidate cache when a region is removed
         }
     }
 
-    public static void removeThreadedChunksRangeByName(String name) {
-        synchronized (threadedChunksRanges) {
-            ThreadedChunksRange range = null;
-            for (ThreadedChunksRange r : threadedChunksRanges) {
+    public static void removeThreadedChunksRegionByName(String name) {
+        synchronized (threadedChunksRegions) {
+            ThreadedChunksRegion region = null;
+            for (ThreadedChunksRegion r : threadedChunksRegions) {
                 if (r.getName().equals(name)) {
-                    range = r;
+                    region = r;
                     break;
                 }
             }
-            if (range != null) {
-                removeThreadedChunksRange(range);
+            if (region != null) {
+                removeThreadedChunksRegion(region);
             }
         }
     }
 
-    private static ThreadedChunksRange findMatchingRange(int chunkX, int chunkZ, World world) {
+    private static ThreadedChunksRegion findMatchingRegion(int chunkX, int chunkZ, World world) {
         ChunkPos pos = new ChunkPos(chunkX, chunkZ);
-        return chunkRangeCache.get(pos, key -> {
-            synchronized (threadedChunksRanges) {
+        return chunkRegionCache.get(pos, key -> {
+            synchronized (threadedChunksRegions) {
                 String worldId = world.getRegistryKey().getValue().toString();
 
-                // Single stream operation to find the smallest matching range
-                return threadedChunksRanges.stream()
-                        .filter(range -> range.contains(worldId, chunkX, chunkZ))
+                // Single stream operation to find the smallest matching region
+                return threadedChunksRegions.stream()
+                        .filter(region -> region.contains(worldId, chunkX, chunkZ))
                         .min((r1, r2) -> {
                             long area1 = r1.getArea();
                             long area2 = r2.getArea();
@@ -111,13 +117,48 @@ public class ParallelProcessor {
 
         AtomicInteger worldPoolThreadID = new AtomicInteger();
         final ClassLoader cl = MCMT.class.getClassLoader();
-        ForkJoinPool.ForkJoinWorkerThreadFactory worldThreadFactory = p -> {
-            ForkJoinWorkerThread fjwt = ForkJoinPool.defaultForkJoinWorkerThreadFactory.newThread(p);
+        ForkJoinPool.ForkJoinWorkerThreadFactory worldThreadFactory = pool -> {
+            int cpuCore = CPUCoreManager.acquireCore();
+            if (cpuCore == -1) {
+                throw new RuntimeException("No available CPU cores for thread affinity");
+            }
+
+            ForkJoinWorkerThread fjwt = new ForkJoinWorkerThread(pool) {
+                private final int assignedCpuCore = cpuCore;
+                private AffinityLock affinityLock;
+
+                @Override
+                protected void onStart() {
+                    super.onStart();
+                    try {
+                        // Step 2: Bind the thread to the CPU core
+                        affinityLock = AffinityLock.acquireLock(assignedCpuCore);
+                    } catch (Exception e) {
+                        throw new RuntimeException("Failed to bind thread to CPU core " + assignedCpuCore, e);
+                    }
+                }
+
+                @Override
+                protected void onTermination(Throwable exception) {
+                    try {
+                        if (affinityLock != null) {
+                            affinityLock.release();
+                            affinityLock = null;
+                        }
+                        // Step 3: Release the CPU core back to CPUCoreManager
+                        CPUCoreManager.releaseCore(assignedCpuCore);
+                    } finally {
+                        super.onTermination(exception);
+                    }
+                }
+            };
+
             fjwt.setName("MCMT-World-Pool-Thread-" + worldPoolThreadID.getAndIncrement());
             regThread("MCMT-World", fjwt);
             fjwt.setContextClassLoader(cl);
             return fjwt;
         };
+
         worldPool = new ForkJoinPool(Math.min(3, Math.max(parallelism / 2, 1)), worldThreadFactory, null, true);
     }
 
@@ -236,14 +277,15 @@ public class ParallelProcessor {
         int chunkX = chunk.getPos().x;
         int chunkZ = chunk.getPos().z;
 
-        ThreadedChunksRange matchingRange = findMatchingRange(chunkX, chunkZ, world);
-        if (matchingRange == null) {
-            // Not inside any ThreadedChunksRange, execute on main thread
-            world.tickChunk(chunk, k);
+        ThreadedChunksRegion matchingRegion = findMatchingRegion(chunkX, chunkZ, world);
+        if (matchingRegion == null) {
+            // No matching region, delay processing
+            delayedChunkTasks.computeIfAbsent(world, w -> new ArrayList<>())
+                    .add(() -> world.tickChunk(chunk, k));
             return;
         }
 
-        ExecutorService executor = matchingRange.getChunkTickExecutor();
+        ExecutorService executor = matchingRegion.getChunkTickExecutor();
         sharedPhasers.get(world).register();
         executor.execute(() -> {
             try {
@@ -256,6 +298,14 @@ public class ParallelProcessor {
 
     public static void postChunkTick(ServerWorld world) {
         if (!config.disabled && !config.disableEnvironment) {
+            // Process delayed chunk tasks
+            List<Runnable> tasks = delayedChunkTasks.remove(world);
+            if (tasks != null) {
+                for (Runnable task : tasks) {
+                    task.run();
+                }
+            }
+
             var phaser = sharedPhasers.get(world);
             phaser.arriveAndDeregister();
             phaser.arriveAndAwaitAdvance();
@@ -275,16 +325,18 @@ public class ParallelProcessor {
         int chunkX = entityIn.getChunkPos().x;
         int chunkZ = entityIn.getChunkPos().z;
 
-        ThreadedChunksRange matchingRange = findMatchingRange(chunkX, chunkZ, serverworld);
-        if (matchingRange == null) {
-            tickConsumer.accept(entityIn);
+        ThreadedChunksRegion matchingRegion = findMatchingRegion(chunkX, chunkZ, serverworld);
+        if (matchingRegion == null) {
+            // No matching region, delay processing
+            delayedEntityTasks.computeIfAbsent(serverworld, w -> new ArrayList<>())
+                    .add(() -> tickConsumer.accept(entityIn));
             return;
         }
 
         // Choose executor based on entity type
         ExecutorService executor = shouldUseSingleThread(entityIn) ?
-                matchingRange.getSingleThreadExecutor() :
-                matchingRange.getEntityTickExecutor();
+                matchingRegion.getSingleThreadExecutor() :
+                matchingRegion.getEntityTickExecutor();
 
         sharedPhasers.get(serverworld).register();
         executor.execute(() -> {
@@ -296,6 +348,7 @@ public class ParallelProcessor {
         });
     }
 
+
     private static boolean shouldUseSingleThread(Entity entity) {
         return entity instanceof FallingBlockEntity ||
                 entity instanceof AllayEntity ||
@@ -304,6 +357,14 @@ public class ParallelProcessor {
 
     public static void postEntityTick(ServerWorld world) {
         if (!config.disabled && !config.disableEntity) {
+            // Process delayed entity tasks
+            List<Runnable> tasks = delayedEntityTasks.remove(world);
+            if (tasks != null) {
+                for (Runnable task : tasks) {
+                    task.run();
+                }
+            }
+
             var phaser = sharedPhasers.get(world);
             phaser.arriveAndDeregister();
             phaser.arriveAndAwaitAdvance();
@@ -329,16 +390,18 @@ public class ParallelProcessor {
         int chunkX = blockEntity.getPos().getX() >> 4;
         int chunkZ = blockEntity.getPos().getZ() >> 4;
 
-        ThreadedChunksRange matchingRange = findMatchingRange(chunkX, chunkZ, world);
-        if (matchingRange == null) {
-            tte.tick();
+        ThreadedChunksRegion matchingRegion = findMatchingRegion(chunkX, chunkZ, world);
+        if (matchingRegion == null) {
+            // No matching region, delay processing
+            delayedBlockEntityTasks.computeIfAbsent((ServerWorld) world, w -> new ArrayList<>())
+                    .add(tte::tick);
             return;
         }
 
         // Choose executor based on block entity type
         ExecutorService executor = shouldUseSingleThread(blockEntity) ?
-                matchingRange.getSingleThreadExecutor() :
-                matchingRange.getBlockEntityTickExecutor();
+                matchingRegion.getSingleThreadExecutor() :
+                matchingRegion.getBlockEntityTickExecutor();
 
         sharedPhasers.get(world).register();
         executor.execute(() -> {
@@ -359,6 +422,14 @@ public class ParallelProcessor {
 
     public static void postBlockEntityTick(ServerWorld world) {
         if (!config.disabled && !config.disableTileEntity) {
+            // Process delayed block entity tasks
+            List<Runnable> tasks = delayedBlockEntityTasks.remove(world);
+            if (tasks != null) {
+                for (Runnable task : tasks) {
+                    task.run();
+                }
+            }
+
             var phaser = sharedPhasers.get(world);
             phaser.arriveAndDeregister();
             phaser.arriveAndAwaitAdvance();
