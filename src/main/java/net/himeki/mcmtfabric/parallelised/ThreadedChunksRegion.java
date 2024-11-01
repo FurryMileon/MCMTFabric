@@ -1,5 +1,6 @@
 package net.himeki.mcmtfabric.parallelised;
 
+import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ThreadFactory;
@@ -25,6 +26,23 @@ public class ThreadedChunksRegion implements ConfigData {
 
     @ConfigEntry.Gui.Excluded
     private transient String source;
+
+    // Double buffers for execution times
+    @ConfigEntry.Gui.Excluded
+    private transient ConcurrentLinkedQueue<Long> chunkTickTimesCurrent = new ConcurrentLinkedQueue<>();
+    @ConfigEntry.Gui.Excluded
+    private transient ConcurrentLinkedQueue<Long> chunkTickTimesLast = new ConcurrentLinkedQueue<>();
+
+    @ConfigEntry.Gui.Excluded
+    private transient ConcurrentLinkedQueue<Long> entityTickTimesCurrent = new ConcurrentLinkedQueue<>();
+    @ConfigEntry.Gui.Excluded
+    private transient ConcurrentLinkedQueue<Long> entityTickTimesLast = new ConcurrentLinkedQueue<>();
+
+    @ConfigEntry.Gui.Excluded
+    private transient ConcurrentLinkedQueue<Long> blockEntityTickTimesCurrent = new ConcurrentLinkedQueue<>();
+    @ConfigEntry.Gui.Excluded
+    private transient ConcurrentLinkedQueue<Long> blockEntityTickTimesLast = new ConcurrentLinkedQueue<>();
+
 
     public ThreadedChunksRegion() {
         // Default constructor required for serialization
@@ -196,5 +214,51 @@ public class ThreadedChunksRegion implements ConfigData {
         long width = Math.abs((long) x2 - x1) + 1;
         long height = Math.abs((long) z2 - z1) + 1;
         return width * height;
+    }
+
+    public ConcurrentLinkedQueue<Long> getChunkTickTimesLast() {
+        return chunkTickTimesLast;
+    }
+
+    public ConcurrentLinkedQueue<Long> getEntityTickTimesLast() {
+        return entityTickTimesLast;
+    }
+
+    public ConcurrentLinkedQueue<Long> getBlockEntityTickTimesLast() {
+        return blockEntityTickTimesLast;
+    }
+
+    // Methods to record execution times to the current buffer
+    public void addChunkTickTime(long duration) {
+        chunkTickTimesCurrent.add(duration);
+    }
+
+    public void addEntityTickTime(long duration) {
+        entityTickTimesCurrent.add(duration);
+    }
+
+    public void addBlockEntityTickTime(long duration) {
+        blockEntityTickTimesCurrent.add(duration);
+    }
+
+    // Method to swap buffers at the end of the tick
+    public void swapExecutionTimeBuffers() {
+        // Swap chunk tick times
+        ConcurrentLinkedQueue<Long> tempChunk = chunkTickTimesLast;
+        chunkTickTimesLast = chunkTickTimesCurrent;
+        chunkTickTimesCurrent = tempChunk;
+        chunkTickTimesCurrent.clear();
+
+        // Swap entity tick times
+        ConcurrentLinkedQueue<Long> tempEntity = entityTickTimesLast;
+        entityTickTimesLast = entityTickTimesCurrent;
+        entityTickTimesCurrent = tempEntity;
+        entityTickTimesCurrent.clear();
+
+        // Swap block entity tick times
+        ConcurrentLinkedQueue<Long> tempBlockEntity = blockEntityTickTimesLast;
+        blockEntityTickTimesLast = blockEntityTickTimesCurrent;
+        blockEntityTickTimesCurrent = tempBlockEntity;
+        blockEntityTickTimesCurrent.clear();
     }
 }

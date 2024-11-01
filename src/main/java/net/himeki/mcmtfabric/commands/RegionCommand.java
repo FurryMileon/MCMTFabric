@@ -17,11 +17,14 @@ import net.minecraft.command.argument.RegistryKeyArgumentType;
 import net.minecraft.registry.RegistryKey;
 import net.minecraft.registry.RegistryKeys;
 import net.minecraft.server.command.ServerCommandSource;
+import net.minecraft.text.MutableText;
 import net.minecraft.text.Text;
+import net.minecraft.util.Formatting;
 import net.minecraft.world.World;
 
 import java.util.ArrayList;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentLinkedQueue;
 
 import static net.minecraft.server.command.CommandManager.argument;
 import static net.minecraft.server.command.CommandManager.literal;
@@ -85,7 +88,13 @@ public class RegionCommand {
                 .then(literal("show")
                         .then(argument("name", StringArgumentType.word())
                                 .suggests((context, builder) -> suggestRegionNames(context.getSource(), builder))
-                                .executes(RegionCommand::executeShow)));
+                                .executes(RegionCommand::executeShow)))
+                .then(literal("stats")
+                        .executes(cmdCtx -> {
+                            dumpRegionStats(cmdCtx.getSource());
+                            return 1;
+                        })
+                );
     }
 
     /**
@@ -430,5 +439,75 @@ public class RegionCommand {
             builder.suggest(region.getName());
         }
         return builder.buildFuture();
+    }
+
+    private static void dumpRegionStats(ServerCommandSource source) {
+        synchronized (ParallelProcessor.threadedChunksRegions) {
+            if (ParallelProcessor.threadedChunksRegions.isEmpty()) {
+                MutableText message = Text.literal("No regions are defined.")
+                        .formatted(Formatting.RED);
+                source.sendFeedback(() -> message, false);
+                return;
+            }
+
+            for (ThreadedChunksRegion region : ParallelProcessor.threadedChunksRegions) {
+                ConcurrentLinkedQueue<Long> chunkTimes = region.getChunkTickTimesLast();
+                ConcurrentLinkedQueue<Long> entityTimes = region.getEntityTickTimesLast();
+                ConcurrentLinkedQueue<Long> blockEntityTimes = region.getBlockEntityTickTimesLast();
+
+                // Aggregate data for chunk ticks
+                long chunkTotalDuration = chunkTimes.stream().mapToLong(Long::longValue).sum();
+                int chunkCount = chunkTimes.size();
+                double chunkAverageDuration = chunkCount > 0 ? (double) chunkTotalDuration / chunkCount : 0;
+
+                // Aggregate data for entity ticks
+                long entityTotalDuration = entityTimes.stream().mapToLong(Long::longValue).sum();
+                int entityCount = entityTimes.size();
+                double entityAverageDuration = entityCount > 0 ? (double) entityTotalDuration / entityCount : 0;
+
+                // Aggregate data for block entity ticks
+                long blockEntityTotalDuration = blockEntityTimes.stream().mapToLong(Long::longValue).sum();
+                int blockEntityCount = blockEntityTimes.size();
+                double blockEntityAverageDuration = blockEntityCount > 0 ? (double) blockEntityTotalDuration / blockEntityCount : 0;
+
+                // Build the message
+                MutableText message = Text.literal("Region '" + region.getName() + "':\n")
+                        .formatted(Formatting.BOLD, Formatting.YELLOW);
+
+
+                if (chunkCount > 0) {
+                    message.append(Text.literal(String.format(
+                                    "  Chunk Ticks - Count: %d, Total Time: %.2f ms, Average Time: %.2f ms\n",
+                                    chunkCount, chunkTotalDuration / 1_000_000.0, chunkAverageDuration / 1_000_000.0))
+                            .formatted(Formatting.GREEN));
+                } else {
+                    message.append(Text.literal("  Chunk Ticks - No data\n")
+                            .formatted(Formatting.GRAY));
+                }
+
+                if (entityCount > 0) {
+                    message.append(Text.literal(String.format(
+                                    "  Entity Ticks - Count: %d, Total Time: %.2f ms, Average Time: %.2f ms\n",
+                                    entityCount, entityTotalDuration / 1_000_000.0, entityAverageDuration / 1_000_000.0))
+                            .formatted(Formatting.AQUA));
+                } else {
+                    message.append(Text.literal("  Entity Ticks - No data\n")
+                            .formatted(Formatting.GRAY));
+                }
+
+                if (blockEntityCount > 0) {
+                    message.append(Text.literal(String.format(
+                                    "  Block Entity Ticks - Count: %d, Total Time: %.2f ms, Average Time: %.2f ms",
+                                    blockEntityCount, blockEntityTotalDuration / 1_000_000.0, blockEntityAverageDuration / 1_000_000.0))
+                            .formatted(Formatting.LIGHT_PURPLE));
+                } else {
+                    message.append(Text.literal("  Block Entity Ticks - No data")
+                            .formatted(Formatting.GRAY));
+                }
+
+                // Send the message to the command source
+                source.sendFeedback(() -> message, false);
+            }
+        }
     }
 }

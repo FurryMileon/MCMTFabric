@@ -235,10 +235,6 @@ public class ParallelProcessor {
         }
     }
 
-    public static long[] lastTickTime = new long[32];
-    public static int lastTickTimePos = 0;
-    public static int lastTickTimeFill = 0;
-
     public static void postTick(MinecraftServer server) {
         if (!config.disabled && !config.disableWorld) {
             if (mcs != server) {
@@ -248,7 +244,7 @@ public class ParallelProcessor {
                 worldPhaser.arriveAndAwaitAdvance();
                 isTicking.set(false);
                 worldPhaser = null;
-                //PostExecute logic
+                // PostExecute logic
                 Deque<Runnable> queue = PostExecutePool.POOL.getQueue();
                 Iterator<Runnable> qi = queue.iterator();
                 while (qi.hasNext()) {
@@ -256,9 +252,12 @@ public class ParallelProcessor {
                     r.run();
                     qi.remove();
                 }
-                lastTickTime[lastTickTimePos] = System.nanoTime() - tickStart;
-                lastTickTimePos = (lastTickTimePos + 1) % lastTickTime.length;
-                lastTickTimeFill = Math.min(lastTickTimeFill + 1, lastTickTime.length - 1);
+
+                synchronized (threadedChunksRegions) {
+                    for (ThreadedChunksRegion region : threadedChunksRegions) {
+                        region.swapExecutionTimeBuffers();
+                    }
+                }
             }
         }
     }
@@ -288,9 +287,13 @@ public class ParallelProcessor {
         ExecutorService executor = matchingRegion.getChunkTickExecutor();
         sharedPhasers.get(world).register();
         executor.execute(() -> {
+            long startTime = System.nanoTime(); // Start timing
             try {
                 world.tickChunk(chunk, k);
             } finally {
+                long endTime = System.nanoTime(); // End timing
+                long duration = endTime - startTime;
+                matchingRegion.addChunkTickTime(duration); // Store execution time
                 sharedPhasers.get(world).arriveAndDeregister();
             }
         });
@@ -333,16 +336,19 @@ public class ParallelProcessor {
             return;
         }
 
-        // Choose executor based on entity type
         ExecutorService executor = shouldUseSingleThread(entityIn) ?
                 matchingRegion.getSingleThreadExecutor() :
                 matchingRegion.getEntityTickExecutor();
 
         sharedPhasers.get(serverworld).register();
         executor.execute(() -> {
+            long startTime = System.nanoTime(); // Start timing
             try {
                 tickConsumer.accept(entityIn);
             } finally {
+                long endTime = System.nanoTime(); // End timing
+                long duration = endTime - startTime;
+                matchingRegion.addEntityTickTime(duration); // Store execution time
                 sharedPhasers.get(serverworld).arriveAndDeregister();
             }
         });
@@ -398,16 +404,19 @@ public class ParallelProcessor {
             return;
         }
 
-        // Choose executor based on block entity type
         ExecutorService executor = shouldUseSingleThread(blockEntity) ?
                 matchingRegion.getSingleThreadExecutor() :
                 matchingRegion.getBlockEntityTickExecutor();
 
         sharedPhasers.get(world).register();
         executor.execute(() -> {
+            long startTime = System.nanoTime(); // Start timing
             try {
                 tte.tick();
             } finally {
+                long endTime = System.nanoTime(); // End timing
+                long duration = endTime - startTime;
+                matchingRegion.addBlockEntityTickTime(duration); // Store execution time
                 sharedPhasers.get(world).arriveAndDeregister();
             }
         });
