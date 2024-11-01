@@ -3,6 +3,7 @@ package net.himeki.mcmtfabric;
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
 import net.himeki.mcmtfabric.config.GeneralConfig;
+import net.himeki.mcmtfabric.debug.WorldTickStats;
 import net.himeki.mcmtfabric.parallelised.CPUCoreManager;
 import net.himeki.mcmtfabric.parallelised.SharedThreadPools;
 import net.himeki.mcmtfabric.parallelised.ThreadedChunksRegion;
@@ -48,6 +49,8 @@ public class ParallelProcessor {
 
     // List of ThreadedChunksRegion
     public static final List<ThreadedChunksRegion> threadedChunksRegions = new ArrayList<>();
+
+    public static final ConcurrentHashMap<ServerWorld, WorldTickStats> worldTickStats = new ConcurrentHashMap<>();
 
     private static final Cache<ChunkPos, ThreadedChunksRegion> chunkRegionCache = Caffeine.newBuilder()
             .maximumSize(1000)
@@ -258,9 +261,16 @@ public class ParallelProcessor {
                         region.swapExecutionTimeBuffers();
                     }
                 }
+
+                synchronized (worldTickStats) {
+                    for (WorldTickStats stats : worldTickStats.values()) {
+                        stats.swapExecutionTimeBuffers();
+                    }
+                }
             }
         }
     }
+
 
     public static void preChunkTick(ServerWorld world) {
         Phaser phaser; // Keep a party throughout 3 ticking phases
@@ -304,8 +314,12 @@ public class ParallelProcessor {
             // Process delayed chunk tasks
             List<Runnable> tasks = delayedChunkTasks.remove(world);
             if (tasks != null) {
+                WorldTickStats stats = worldTickStats.computeIfAbsent(world, w -> new WorldTickStats());
                 for (Runnable task : tasks) {
+                    long startTime = System.nanoTime();
                     task.run();
+                    long endTime = System.nanoTime();
+                    stats.chunkTickTimesCurrent.add(endTime - startTime);
                 }
             }
 
@@ -314,6 +328,7 @@ public class ParallelProcessor {
             phaser.arriveAndAwaitAdvance();
         }
     }
+
 
     public static void preEntityTick(ServerWorld world) {
         if (!config.disabled && !config.disableEntity) sharedPhasers.get(world).register();
@@ -366,8 +381,12 @@ public class ParallelProcessor {
             // Process delayed entity tasks
             List<Runnable> tasks = delayedEntityTasks.remove(world);
             if (tasks != null) {
+                WorldTickStats stats = worldTickStats.computeIfAbsent(world, w -> new WorldTickStats());
                 for (Runnable task : tasks) {
+                    long startTime = System.nanoTime();
                     task.run();
+                    long endTime = System.nanoTime();
+                    stats.entityTickTimesCurrent.add(endTime - startTime);
                 }
             }
 
@@ -434,8 +453,12 @@ public class ParallelProcessor {
             // Process delayed block entity tasks
             List<Runnable> tasks = delayedBlockEntityTasks.remove(world);
             if (tasks != null) {
+                WorldTickStats stats = worldTickStats.computeIfAbsent(world, w -> new WorldTickStats());
                 for (Runnable task : tasks) {
+                    long startTime = System.nanoTime();
                     task.run();
+                    long endTime = System.nanoTime();
+                    stats.blockEntityTickTimesCurrent.add(endTime - startTime);
                 }
             }
 
