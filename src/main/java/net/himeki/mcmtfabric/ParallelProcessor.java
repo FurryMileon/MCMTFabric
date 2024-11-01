@@ -53,7 +53,8 @@ public class ParallelProcessor {
     public static final ConcurrentHashMap<ServerWorld, WorldTickStats> worldTickStats = new ConcurrentHashMap<>();
 
     private static final Cache<ChunkPos, ThreadedChunksRegion> chunkRegionCache = Caffeine.newBuilder()
-            .maximumSize(1000)
+            .initialCapacity(10000)
+            .maximumSize(10000)
             .build();
 
     public static void resetThreadedChunksRegions() {
