@@ -483,18 +483,35 @@ public class RegionCommand {
             ConcurrentLinkedQueue<Long> entityTimes,
             ConcurrentLinkedQueue<Long> blockEntityTimes) {
 
+        ThreadedChunksRegion region = null;
+        if (categoryName.equals("Region")) {
+            // Find the matching region to get stage durations
+            for (ThreadedChunksRegion r : ParallelProcessor.threadedChunksRegions) {
+                if (r.getName().equals(instanceName)) {
+                    region = r;
+                    break;
+                }
+            }
+        }
+
         // Build the header message
         MutableText message = Text.literal(categoryName + " '" + instanceName + "':\n")
                 .formatted(Formatting.BOLD, Formatting.YELLOW);
 
         // Add chunk statistics
-        message.append(formatTickStats("Chunk Ticks", chunkTimes, Formatting.GREEN));
+        message.append(formatTickStats("Chunk Ticks", chunkTimes,
+                region != null ? region.getLastChunkStageDuration() : null,
+                Formatting.GREEN));
 
         // Add entity statistics
-        message.append(formatTickStats("Entity Ticks", entityTimes, Formatting.AQUA));
+        message.append(formatTickStats("Entity Ticks", entityTimes,
+                region != null ? region.getLastEntityStageDuration() : null,
+                Formatting.AQUA));
 
         // Add block entity statistics
-        message.append(formatTickStats("Block Entity Ticks", blockEntityTimes, Formatting.LIGHT_PURPLE));
+        message.append(formatTickStats("Block Entity Ticks", blockEntityTimes,
+                region != null ? region.getLastBlockEntityStageDuration() : null,
+                Formatting.LIGHT_PURPLE));
 
         // Send the message to the command source
         source.sendFeedback(() -> message, false);
@@ -503,9 +520,15 @@ public class RegionCommand {
     private static MutableText formatTickStats(
             String label,
             ConcurrentLinkedQueue<Long> times,
+            Long actualStageDuration,
             Formatting color) {
 
         if (times.isEmpty()) {
+            if (actualStageDuration != null) {
+                return Text.literal(String.format("  %s - No individual ticks, Actual Stage Time: %.2f ms\n",
+                                label, actualStageDuration / 1_000_000.0))
+                        .formatted(Formatting.GRAY);
+            }
             return Text.literal("  " + label + " - No data\n")
                     .formatted(Formatting.GRAY);
         }
@@ -519,10 +542,18 @@ public class RegionCommand {
         double totalMs = totalDuration / 1_000_000.0;
         double averageMs = averageDuration / 1_000_000.0;
 
-        return Text.literal(String.format(
-                        "  %s - Count: %d, Total Time: %.2f ms, Average Time: %.2f ms\n",
-                        label, count, totalMs, averageMs))
-                .formatted(color);
+        if (actualStageDuration != null) {
+            double actualMs = actualStageDuration / 1_000_000.0;
+            return Text.literal(String.format(
+                            "  %s - Count: %d, Accumulated Time: %.2f ms (avg %.2f ms), Actual Stage Time: %.2f ms\n",
+                            label, count, totalMs, averageMs, actualMs))
+                    .formatted(color);
+        } else {
+            return Text.literal(String.format(
+                            "  %s - Count: %d, Total Time: %.2f ms, Average Time: %.2f ms\n",
+                            label, count, totalMs, averageMs))
+                    .formatted(color);
+        }
     }
 
 }

@@ -36,7 +36,6 @@ public class ParallelProcessor {
 
     static Phaser worldPhaser;
 
-    static ConcurrentHashMap<ServerWorld, Phaser> sharedPhasers = new ConcurrentHashMap<>();
     static ExecutorService worldPool;
     static MinecraftServer mcs;
     static AtomicBoolean isTicking = new AtomicBoolean();
@@ -191,7 +190,7 @@ public class ParallelProcessor {
     static GeneralConfig config;
 
     public static void preTick(int size, MinecraftServer server) {
-        config = MCMT.config; // Load when config are loaded. Static loads before config update.
+        config = MCMT.config;
         if (!config.disabled && !config.disableWorld) {
             if (worldPhaser != null) {
                 LOGGER.warn("Multiple servers?");
@@ -203,7 +202,14 @@ public class ParallelProcessor {
                 mcs = server;
             }
         }
+        // Initialize phasers for all regions
+        synchronized (threadedChunksRegions) {
+            for (ThreadedChunksRegion region : threadedChunksRegions) {
+                region.initializePhaser();
+            }
+        }
     }
+
 
     public static void callTick(ServerWorld serverworld, BooleanSupplier hasTimeLeft, MinecraftServer server) {
         if (config.disabled || config.disableWorld) {
@@ -256,32 +262,37 @@ public class ParallelProcessor {
                     r.run();
                     qi.remove();
                 }
+            }
+        }
 
-                synchronized (threadedChunksRegions) {
-                    for (ThreadedChunksRegion region : threadedChunksRegions) {
-                        region.swapExecutionTimeBuffers();
-                    }
-                }
+        synchronized (threadedChunksRegions) {
+            for (ThreadedChunksRegion region : threadedChunksRegions) {
+                region.swapExecutionTimeBuffers();
+            }
+        }
 
-                synchronized (worldTickStats) {
-                    for (WorldTickStats stats : worldTickStats.values()) {
-                        stats.swapExecutionTimeBuffers();
-                    }
-                }
+        synchronized (worldTickStats) {
+            for (WorldTickStats stats : worldTickStats.values()) {
+                stats.swapExecutionTimeBuffers();
             }
         }
     }
 
 
     public static void preChunkTick(ServerWorld world) {
-        Phaser phaser; // Keep a party throughout 3 ticking phases
-        if (!config.disabled && !config.disableEnvironment) {
-            phaser = new Phaser(2);
-        } else {
-            phaser = new Phaser(1);
+        if (config.disabled || config.disableEnvironment) {
+            return;
         }
-        sharedPhasers.put(world, phaser);
+        synchronized (threadedChunksRegions) {
+            for (ThreadedChunksRegion region : threadedChunksRegions) {
+                if (region.getWorldId().equals(world.getRegistryKey().getValue().toString())) {
+                    // Register the main thread in the region's chunkTickPhaser
+                    region.getChunkTickPhaser().register();
+                }
+            }
+        }
     }
+
 
     public static void callTickChunks(ServerWorld world, WorldChunk chunk, int k) {
         int chunkX = chunk.getPos().x;
@@ -296,22 +307,43 @@ public class ParallelProcessor {
         }
 
         ExecutorService executor = matchingRegion.getChunkTickExecutor();
-        sharedPhasers.get(world).register();
+
+        String taskName;
+        if (config.opsTracing) {
+            taskName = "ChunkTick: " + chunk + "@" + chunk.hashCode();
+            matchingRegion.currentTasks.add(taskName);
+        } else {
+            taskName = "";
+        }
+
+
+        matchingRegion.getChunkTickPhaser().register();
+
         executor.execute(() -> {
-            long startTime = System.nanoTime(); // Start timing
             try {
+                matchingRegion.recordChunkStageStart();
+
+                long startTime = System.nanoTime(); // Start timing
                 world.tickChunk(chunk, k);
-            } finally {
                 long endTime = System.nanoTime(); // End timing
                 long duration = endTime - startTime;
                 matchingRegion.addChunkTickTime(duration); // Store execution time
-                sharedPhasers.get(world).arriveAndDeregister();
+            } finally {
+                matchingRegion.getChunkTickPhaser().arrive();
+                if (config.opsTracing) matchingRegion.currentTasks.remove(taskName);
             }
         });
     }
 
     public static void postChunkTick(ServerWorld world) {
         if (!config.disabled && !config.disableEnvironment) {
+            for (ThreadedChunksRegion region : threadedChunksRegions) {
+                if (region.getWorldId().equals(world.getRegistryKey().getValue().toString())) {
+                    // Main thread arrives
+//                    region.getChunkTickPhaser().arriveAndDeregister();
+                    region.getChunkTickPhaser().arrive();
+                }
+            }
             // Process delayed chunk tasks
             List<Runnable> tasks = delayedChunkTasks.remove(world);
             if (tasks != null) {
@@ -323,17 +355,24 @@ public class ParallelProcessor {
                     stats.chunkTickTimesCurrent.add(endTime - startTime);
                 }
             }
-
-            var phaser = sharedPhasers.get(world);
-            phaser.arriveAndDeregister();
-            phaser.arriveAndAwaitAdvance();
         }
     }
 
 
     public static void preEntityTick(ServerWorld world) {
-        if (!config.disabled && !config.disableEntity) sharedPhasers.get(world).register();
+        if (config.disabled || config.disableEntity) {
+            return;
+        }
+        synchronized (threadedChunksRegions) {
+            for (ThreadedChunksRegion region : threadedChunksRegions) {
+                if (region.getWorldId().equals(world.getRegistryKey().getValue().toString())) {
+                    // Register the main thread in the region's entityTickPhaser
+                    region.getEntityTickPhaser().register();
+                }
+            }
+        }
     }
+
 
     public static void callEntityTick(Consumer<Entity> tickConsumer, Entity entityIn, ServerWorld serverworld) {
         if (config.disabled || config.disableEntity) {
@@ -356,20 +395,34 @@ public class ParallelProcessor {
                 matchingRegion.getSingleThreadExecutor() :
                 matchingRegion.getEntityTickExecutor();
 
-        sharedPhasers.get(serverworld).register();
+        String taskName;
+        if (config.opsTracing) {
+            taskName = "EntityTick: " + entityIn;
+            matchingRegion.currentTasks.add(taskName);
+        } else {
+            taskName = "";
+        }
+
+
+        matchingRegion.getEntityTickPhaser().register();
         executor.execute(() -> {
-            long startTime = System.nanoTime(); // Start timing
             try {
+                // Wait for chunk tick stage to complete in this region
+                matchingRegion.getChunkTickPhaser().awaitAdvance(0);
+                matchingRegion.recordChunkStageDuration();
+                matchingRegion.recordEntityStageStart();
+
+                long startTime = System.nanoTime();
                 tickConsumer.accept(entityIn);
-            } finally {
-                long endTime = System.nanoTime(); // End timing
+                long endTime = System.nanoTime();
                 long duration = endTime - startTime;
-                matchingRegion.addEntityTickTime(duration); // Store execution time
-                sharedPhasers.get(serverworld).arriveAndDeregister();
+                matchingRegion.addEntityTickTime(duration);
+            } finally {
+                matchingRegion.getEntityTickPhaser().arrive();
+                if (config.opsTracing) matchingRegion.currentTasks.remove(taskName);
             }
         });
     }
-
 
     private static boolean shouldUseSingleThread(Entity entity) {
         return entity instanceof FallingBlockEntity ||
@@ -379,6 +432,14 @@ public class ParallelProcessor {
 
     public static void postEntityTick(ServerWorld world) {
         if (!config.disabled && !config.disableEntity) {
+            synchronized (threadedChunksRegions) {
+                for (ThreadedChunksRegion region : threadedChunksRegions) {
+                    if (region.getWorldId().equals(world.getRegistryKey().getValue().toString())) {
+//                        region.getEntityTickPhaser().arriveAndDeregister();
+                        region.getEntityTickPhaser().arrive();
+                    }
+                }
+            }
             // Process delayed entity tasks
             List<Runnable> tasks = delayedEntityTasks.remove(world);
             if (tasks != null) {
@@ -390,15 +451,20 @@ public class ParallelProcessor {
                     stats.entityTickTimesCurrent.add(endTime - startTime);
                 }
             }
-
-            var phaser = sharedPhasers.get(world);
-            phaser.arriveAndDeregister();
-            phaser.arriveAndAwaitAdvance();
         }
     }
 
     public static void preBlockEntityTick(ServerWorld world) {
-        if (!config.disabled && !config.disableTileEntity) sharedPhasers.get(world).register();
+        if (config.disabled || config.disableTileEntity) {
+            return;
+        }
+        synchronized (threadedChunksRegions) {
+            for (ThreadedChunksRegion region : threadedChunksRegions) {
+                if (region.getWorldId().equals(world.getRegistryKey().getValue().toString())) {
+                    region.getBlockEntityTickPhaser().register();
+                }
+            }
+        }
     }
 
     public static void callBlockEntityTick(BlockEntityTickInvoker tte, World world) {
@@ -428,19 +494,34 @@ public class ParallelProcessor {
                 matchingRegion.getSingleThreadExecutor() :
                 matchingRegion.getBlockEntityTickExecutor();
 
-        sharedPhasers.get(world).register();
+        String taskName;
+        if (config.opsTracing) {
+            taskName = "BlockEntityTick: " + tte + "@" + tte.hashCode();
+            matchingRegion.currentTasks.add(taskName);
+        } else {
+            taskName = "";
+        }
+
+        matchingRegion.getBlockEntityTickPhaser().register();
         executor.execute(() -> {
-            long startTime = System.nanoTime(); // Start timing
             try {
+                // Wait for entity tick stage to complete in this region
+                matchingRegion.getEntityTickPhaser().awaitAdvance(0);
+                matchingRegion.recordEntityStageDuration();
+                matchingRegion.recordBlockEntityStageStart();
+
+                long startTime = System.nanoTime();
                 tte.tick();
-            } finally {
-                long endTime = System.nanoTime(); // End timing
+                long endTime = System.nanoTime();
                 long duration = endTime - startTime;
-                matchingRegion.addBlockEntityTickTime(duration); // Store execution time
-                sharedPhasers.get(world).arriveAndDeregister();
+                matchingRegion.addBlockEntityTickTime(duration);
+            } finally {
+                matchingRegion.getBlockEntityTickPhaser().arrive();
+                if (config.opsTracing) matchingRegion.currentTasks.remove(taskName);
             }
         });
     }
+
 
     private static boolean shouldUseSingleThread(BlockEntity blockEntity) {
         return blockEntity instanceof PistonBlockEntity ||
@@ -462,10 +543,16 @@ public class ParallelProcessor {
                     stats.blockEntityTickTimesCurrent.add(endTime - startTime);
                 }
             }
+        }
 
-            var phaser = sharedPhasers.get(world);
-            phaser.arriveAndDeregister();
-            phaser.arriveAndAwaitAdvance();
+        synchronized (threadedChunksRegions) {
+            for (ThreadedChunksRegion region : threadedChunksRegions) {
+                if (region.getWorldId().equals(world.getRegistryKey().getValue().toString())) {
+                    // Main thread arrives
+                    region.getBlockEntityTickPhaser().arriveAndAwaitAdvance();
+                    region.recordBlockEntityStageDuration();
+                }
+            }
         }
     }
 

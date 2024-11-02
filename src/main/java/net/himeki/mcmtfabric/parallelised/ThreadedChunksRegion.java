@@ -1,9 +1,8 @@
 package net.himeki.mcmtfabric.parallelised;
 
-import java.util.concurrent.ConcurrentLinkedQueue;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.ThreadFactory;
+import java.util.Set;
+import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import me.shedaniel.autoconfig.ConfigData;
 import me.shedaniel.autoconfig.annotation.ConfigEntry;
@@ -43,6 +42,53 @@ public class ThreadedChunksRegion implements ConfigData {
     @ConfigEntry.Gui.Excluded
     private transient ConcurrentLinkedQueue<Long> blockEntityTickTimesLast = new ConcurrentLinkedQueue<>();
 
+    @ConfigEntry.Gui.Excluded
+    private transient volatile long chunkStageStartTime = 0;
+    @ConfigEntry.Gui.Excluded
+    private transient volatile long entityStageStartTime = 0;
+    @ConfigEntry.Gui.Excluded
+    private transient volatile long blockEntityStageStartTime = 0;
+
+    @ConfigEntry.Gui.Excluded
+    private transient volatile long currentChunkStageDuration = 0;
+    @ConfigEntry.Gui.Excluded
+    private transient volatile long lastChunkStageDuration = 0;
+    @ConfigEntry.Gui.Excluded
+    private transient volatile long currentEntityStageDuration = 0;
+    @ConfigEntry.Gui.Excluded
+    private transient volatile long lastEntityStageDuration = 0;
+    @ConfigEntry.Gui.Excluded
+    private transient volatile long currentBlockEntityStageDuration = 0;
+    @ConfigEntry.Gui.Excluded
+    private transient volatile long lastBlockEntityStageDuration = 0;
+
+    @ConfigEntry.Gui.Excluded
+    private transient final AtomicBoolean chunkStageStarted = new AtomicBoolean(false);
+    @ConfigEntry.Gui.Excluded
+    private transient final AtomicBoolean entityStageStarted = new AtomicBoolean(false);
+    @ConfigEntry.Gui.Excluded
+    private transient final AtomicBoolean blockEntityStageStarted = new AtomicBoolean(false);
+
+    @ConfigEntry.Gui.Excluded
+    private transient final AtomicBoolean chunkStageMeasured = new AtomicBoolean(false);
+    @ConfigEntry.Gui.Excluded
+    private transient final AtomicBoolean entityStageMeasured = new AtomicBoolean(false);
+    @ConfigEntry.Gui.Excluded
+    private transient final AtomicBoolean blockEntityStageMeasured = new AtomicBoolean(false);
+
+
+    @ConfigEntry.Gui.Excluded
+    private transient Phaser chunkTickPhaser = new Phaser(0);
+
+    @ConfigEntry.Gui.Excluded
+    private transient Phaser entityTickPhaser = new Phaser(0);
+
+    @ConfigEntry.Gui.Excluded
+    private transient Phaser blockEntityTickPhaser = new Phaser(0);
+
+    @ConfigEntry.Gui.Excluded
+    public transient Set<String> currentTasks = ConcurrentHashMap.newKeySet();
+
 
     public ThreadedChunksRegion() {
         // Default constructor required for serialization
@@ -61,6 +107,13 @@ public class ThreadedChunksRegion implements ConfigData {
         this.x2 = Math.max(x1, x2);
         this.z2 = Math.max(z1, z2);
         this.source = source;
+    }
+
+    public void initializePhaser() {
+        // Initialize phaser with 1 party (the main thread)
+        this.chunkTickPhaser = new Phaser(0);
+        this.entityTickPhaser = new Phaser(0);
+        this.blockEntityTickPhaser = new Phaser(0);
     }
 
     private ThreadFactory createNamedVirtualThreadFactory() {
@@ -241,24 +294,96 @@ public class ThreadedChunksRegion implements ConfigData {
         blockEntityTickTimesCurrent.add(duration);
     }
 
+    public void recordChunkStageStart() {
+        if (chunkStageStarted.compareAndSet(false, true)) {
+            chunkStageStartTime = System.nanoTime();
+        }
+    }
+
+    public void recordEntityStageStart() {
+        if (entityStageStarted.compareAndSet(false, true)) {
+            entityStageStartTime = System.nanoTime();
+        }
+    }
+
+    public void recordBlockEntityStageStart() {
+        if (blockEntityStageStarted.compareAndSet(false, true)) {
+            blockEntityStageStartTime = System.nanoTime();
+        }
+    }
+
+    public void recordChunkStageDuration() {
+        if (chunkStageMeasured.compareAndSet(false, true)) {
+            currentChunkStageDuration = System.nanoTime() - chunkStageStartTime;
+        }
+    }
+
+    public void recordEntityStageDuration() {
+        if (entityStageMeasured.compareAndSet(false, true)) {
+            currentEntityStageDuration = System.nanoTime() - entityStageStartTime;
+        }
+    }
+
+    public void recordBlockEntityStageDuration() {
+        if (blockEntityStageMeasured.compareAndSet(false, true)) {
+            currentBlockEntityStageDuration = System.nanoTime() - blockEntityStageStartTime;
+        }
+    }
+
+    public long getLastChunkStageDuration() {
+        return lastChunkStageDuration;
+    }
+
+    public long getLastEntityStageDuration() {
+        return lastEntityStageDuration;
+    }
+
+    public long getLastBlockEntityStageDuration() {
+        return lastBlockEntityStageDuration;
+    }
+
+
     // Method to swap buffers at the end of the tick
     public void swapExecutionTimeBuffers() {
-        // Swap chunk tick times
+        // Swap individual tick times (existing logic)
         ConcurrentLinkedQueue<Long> tempChunk = chunkTickTimesLast;
         chunkTickTimesLast = chunkTickTimesCurrent;
         chunkTickTimesCurrent = tempChunk;
         chunkTickTimesCurrent.clear();
 
-        // Swap entity tick times
         ConcurrentLinkedQueue<Long> tempEntity = entityTickTimesLast;
         entityTickTimesLast = entityTickTimesCurrent;
         entityTickTimesCurrent = tempEntity;
         entityTickTimesCurrent.clear();
 
-        // Swap block entity tick times
         ConcurrentLinkedQueue<Long> tempBlockEntity = blockEntityTickTimesLast;
         blockEntityTickTimesLast = blockEntityTickTimesCurrent;
         blockEntityTickTimesCurrent = tempBlockEntity;
         blockEntityTickTimesCurrent.clear();
+
+        // Swap stage durations
+        lastChunkStageDuration = currentChunkStageDuration;
+        lastEntityStageDuration = currentEntityStageDuration;
+        lastBlockEntityStageDuration = currentBlockEntityStageDuration;
+
+        // Reset measurement flags
+        chunkStageStarted.set(false);
+        entityStageStarted.set(false);
+        blockEntityStageStarted.set(false);
+        chunkStageMeasured.set(false);
+        entityStageMeasured.set(false);
+        blockEntityStageMeasured.set(false);
+    }
+
+    public Phaser getChunkTickPhaser() {
+        return chunkTickPhaser;
+    }
+
+    public Phaser getEntityTickPhaser() {
+        return entityTickPhaser;
+    }
+
+    public Phaser getBlockEntityTickPhaser() {
+        return blockEntityTickPhaser;
     }
 }
