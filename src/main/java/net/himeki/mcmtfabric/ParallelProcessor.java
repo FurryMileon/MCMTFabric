@@ -74,6 +74,7 @@ public class ParallelProcessor {
     public static void addThreadedChunksRegion(ThreadedChunksRegion region) {
         synchronized (pendingRegionsToAdd) {
             pendingRegionsToAdd.add(region);
+            region.getSingleThreadExecutor(); // Force load executor once to avoid blocking when there is no chunk tick
         }
     }
 
@@ -207,16 +208,16 @@ public class ParallelProcessor {
                     pendingRegionsToAdd.clear();
                 }
             }
+        }
+        synchronized (pendingRegionsToRemove) {
             if (!pendingRegionsToRemove.isEmpty()) {
-                synchronized (threadedChunksRegions) {
-                    threadedChunksRegions.removeAll(pendingRegionsToRemove);
-                    synchronized (pendingRegionsToRemove) {
-                        for (ThreadedChunksRegion region : pendingRegionsToRemove) {
-                            region.shutdownExecutors();
-                        }
-                        chunkRegionCache.invalidateAll();
-                        pendingRegionsToRemove.clear();
+                threadedChunksRegions.removeAll(pendingRegionsToRemove);
+                synchronized (pendingRegionsToRemove) {
+                    for (ThreadedChunksRegion region : pendingRegionsToRemove) {
+                        region.shutdownExecutors();
                     }
+                    chunkRegionCache.invalidateAll();
+                    pendingRegionsToRemove.clear();
                 }
             }
         }
@@ -299,7 +300,7 @@ public class ParallelProcessor {
             for (ThreadedChunksRegion region : threadedChunksRegions) {
                 if (region.getWorldId().equals(world.getRegistryKey().getValue().toString())) {
                     // Register the main thread in the region's chunkTickPhaser
-                    region.getChunkTickPhaser().register();
+//                    region.getChunkTickPhaser().register();
                 }
             }
         }
@@ -352,14 +353,16 @@ public class ParallelProcessor {
     }
 
     public static void postChunkTick(ServerWorld world) {
-        if (!config.disabled && !config.disableEnvironment) {
+        synchronized (threadedChunksRegions) {
             for (ThreadedChunksRegion region : threadedChunksRegions) {
                 if (region.getWorldId().equals(world.getRegistryKey().getValue().toString())) {
-                    // Main thread arrives
-//                    region.getChunkTickPhaser().arriveAndDeregister();
                     region.getChunkTickPhaser().arrive();
+                    if (!(region.getChunkTickPhaser().getRegisteredParties() > 1))
+                        region.recordChunkStageEnd();
                 }
             }
+        }
+        if (!config.disabled && !config.disableEnvironment) {
             // Process delayed chunk tasks
             List<Runnable> tasks = delayedChunkTasks.remove(world);
             if (tasks != null) {
@@ -383,7 +386,7 @@ public class ParallelProcessor {
             for (ThreadedChunksRegion region : threadedChunksRegions) {
                 if (region.getWorldId().equals(world.getRegistryKey().getValue().toString())) {
                     // Register the main thread in the region's entityTickPhaser
-                    region.getEntityTickPhaser().register();
+//                    region.getEntityTickPhaser().register();
                 }
             }
         }
@@ -426,7 +429,7 @@ public class ParallelProcessor {
                     taskName = "";
                 }
 
-                matchingRegion.recordChunkStageDuration();
+                matchingRegion.recordChunkStageEnd();
                 matchingRegion.recordEntityStageStart();
 
                 long startTime = System.nanoTime();
@@ -455,9 +458,11 @@ public class ParallelProcessor {
         if (!config.disabled && !config.disableEntity) {
             synchronized (threadedChunksRegions) {
                 for (ThreadedChunksRegion region : threadedChunksRegions) {
-                    if (region.getWorldId().equals(world.getRegistryKey().getValue().toString())) {
-                        region.getEntityTickPhaser().arrive();
+                    if (!(region.getEntityTickPhaser().getRegisteredParties() > 1)) {
+                        region.recordChunkStageEnd();   // No worker to wait for chunk stage end and record, so record here
                     }
+                    if (region.getWorldId().equals(world.getRegistryKey().getValue().toString()))
+                        region.getEntityTickPhaser().arrive();
                 }
             }
             // Process delayed entity tasks
@@ -481,7 +486,7 @@ public class ParallelProcessor {
         synchronized (threadedChunksRegions) {
             for (ThreadedChunksRegion region : threadedChunksRegions) {
                 if (region.getWorldId().equals(world.getRegistryKey().getValue().toString())) {
-                    region.getBlockEntityTickPhaser().register();
+//                    region.getBlockEntityTickPhaser().register();
                 }
             }
         }
@@ -529,7 +534,7 @@ public class ParallelProcessor {
                     taskName = "";
                 }
 
-                matchingRegion.recordEntityStageDuration();
+                matchingRegion.recordEntityStageEnd();
                 matchingRegion.recordBlockEntityStageStart();
 
                 long startTime = System.nanoTime();
@@ -575,8 +580,12 @@ public class ParallelProcessor {
             for (ThreadedChunksRegion region : threadedChunksRegions) {
                 if (region.getWorldId().equals(world.getRegistryKey().getValue().toString())) {
                     // Main thread arrives
+                    if (!(region.getBlockEntityTickPhaser().getRegisteredParties() > 1)) {
+                        region.getChunkTickPhaser().awaitAdvance(0);
+                        region.getEntityTickPhaser().awaitAdvance(0);
+                    }
                     region.getBlockEntityTickPhaser().arriveAndAwaitAdvance();
-                    region.recordBlockEntityStageDuration();
+                    region.recordBlockEntityStageEnd();
                     region.initializePhaser();
                 }
             }

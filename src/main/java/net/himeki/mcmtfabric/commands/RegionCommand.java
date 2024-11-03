@@ -525,8 +525,8 @@ public class RegionCommand {
 
         if (times.isEmpty()) {
             if (actualStageDuration != null) {
-                return Text.literal(String.format("  %s - No individual ticks, Actual Stage Time: %.2f ms\n",
-                                label, actualStageDuration / 1_000_000.0))
+                return Text.literal(String.format("  %s - No individual ticks\n",
+                                label))
                         .formatted(Formatting.GRAY);
             }
             return Text.literal("  " + label + " - No data\n")

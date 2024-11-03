@@ -85,13 +85,13 @@ public class ThreadedChunksRegion implements ConfigData {
 
 
     @ConfigEntry.Gui.Excluded
-    private transient Phaser chunkTickPhaser = new Phaser(0);
+    private transient Phaser chunkTickPhaser = new Phaser(1);
 
     @ConfigEntry.Gui.Excluded
-    private transient Phaser entityTickPhaser = new Phaser(0);
+    private transient Phaser entityTickPhaser = new Phaser(1);
 
     @ConfigEntry.Gui.Excluded
-    private transient Phaser blockEntityTickPhaser = new Phaser(0);
+    private transient Phaser blockEntityTickPhaser = new Phaser(1);
 
     @ConfigEntry.Gui.Excluded
     public transient Set<String> currentTasks = ConcurrentHashMap.newKeySet();
@@ -121,9 +121,9 @@ public class ThreadedChunksRegion implements ConfigData {
 
     public void initializePhaser() {
         // Initialize phaser with 1 party (the main thread)
-        this.chunkTickPhaser = new Phaser(0);
-        this.entityTickPhaser = new Phaser(0);
-        this.blockEntityTickPhaser = new Phaser(0);
+        this.chunkTickPhaser = new Phaser(1);
+        this.entityTickPhaser = new Phaser(1);
+        this.blockEntityTickPhaser = new Phaser(1);
     }
 
 
@@ -290,19 +290,19 @@ public class ThreadedChunksRegion implements ConfigData {
         }
     }
 
-    public void recordChunkStageDuration() {
+    public void recordChunkStageEnd() {
         if (chunkStageMeasured.compareAndSet(false, true)) {
             currentChunkStageDuration = System.nanoTime() - chunkStageStartTime;
         }
     }
 
-    public void recordEntityStageDuration() {
+    public void recordEntityStageEnd() {
         if (entityStageMeasured.compareAndSet(false, true)) {
             currentEntityStageDuration = System.nanoTime() - entityStageStartTime;
         }
     }
 
-    public void recordBlockEntityStageDuration() {
+    public void recordBlockEntityStageEnd() {
         if (blockEntityStageMeasured.compareAndSet(false, true)) {
             currentBlockEntityStageDuration = System.nanoTime() - blockEntityStageStartTime;
         }
