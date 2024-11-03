@@ -5,6 +5,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
@@ -14,6 +15,22 @@ public class CPUCoreManager {
     private static final BitSet usedCores = new BitSet(MAX_CORES);
     private static final BitSet availableCores = new BitSet(MAX_CORES);
     private static final Map<Integer, Integer> hyperThreadPairs = new HashMap<>();
+
+    private static final Map<Integer, String> coreOwners = new ConcurrentHashMap<>();
+    private static final PriorityQueue<String> waitingThreads = new PriorityQueue<>(
+            Comparator.comparingInt(CPUCoreManager::getThreadPriority)
+    );
+
+    private static final BitSet sharedPoolCores = new BitSet(MAX_CORES);
+
+    private static int getThreadPriority(String threadType) {
+        return switch (threadType) {
+            case "WORLD" -> 20;
+            case "REGION" -> 10;
+            case "SHARED" -> 5;
+            default -> 0;
+        };
+    }
 
     static {
         initializeAvailableCores();
@@ -106,25 +123,107 @@ public class CPUCoreManager {
         }
     }
 
-    public static synchronized int acquireCore() {
-        // Look for the next available and unused core
+    // Add method to mark core as used by shared pool
+    private static synchronized void markSharedPoolCore(int core) {
+        if (core >= 0 && core < MAX_CORES) {
+            sharedPoolCores.set(core);
+        }
+    }
+
+    // Add method to unmark core from shared pool
+    private static synchronized void unmarkSharedPoolCore(int core) {
+        if (core >= 0 && core < MAX_CORES) {
+            sharedPoolCores.clear(core);
+        }
+    }
+
+    public static synchronized int acquireCore(String ownerType) {
+        // If no cores immediately available, try to preempt lower priority thread
+        if (getUsedCoreCount() == availableCores.cardinality()) {
+            int preemptedCore = tryPreemptCore(ownerType);
+            if (preemptedCore >= 0) {
+                return preemptedCore;
+            }
+        }
+
+        // Normal acquisition logic
         for (int i = availableCores.nextSetBit(0); i >= 0; i = availableCores.nextSetBit(i + 1)) {
             if (!usedCores.get(i) && isCoreOnline(i)) {
                 usedCores.set(i);
+                coreOwners.put(i, ownerType);
+                if ("SHARED".equals(ownerType)) {
+                    markSharedPoolCore(i);
+                }
                 return i;
             }
         }
-        return -1; // No cores available
+
+        return -1;
     }
 
-    public static synchronized void releaseCore(int core) {
+    public static synchronized void releaseCore(int core, String ownerType) {
         if (core >= 0 && core < MAX_CORES && availableCores.get(core)) {
-            usedCores.clear(core);
+            // Verify owner before release
+            if (coreOwners.get(core).equals(ownerType)) {
+                usedCores.clear(core);
+                coreOwners.remove(core);
+
+                if ("SHARED".equals(ownerType)) {
+                    unmarkSharedPoolCore(core);
+                }
+
+                // Check waiting threads
+                String nextOwner = waitingThreads.poll();
+                if (nextOwner != null) {
+                    usedCores.set(core);
+                    coreOwners.put(core, nextOwner);
+                    if ("SHARED".equals(nextOwner)) {
+                        markSharedPoolCore(core);
+                    }
+                }
+            }
         }
     }
 
+    // Modified to exclude shared pool cores
     public static synchronized int getUsedCoreCount() {
+        BitSet nonSharedCores = new BitSet(MAX_CORES);
+        nonSharedCores.or(usedCores);
+        nonSharedCores.andNot(sharedPoolCores);
+        return nonSharedCores.cardinality();
+    }
+
+    // Add method to get total used cores including shared pool
+    public static synchronized int getTotalUsedCoreCount() {
         return usedCores.cardinality();
+    }
+
+    // Add method to get shared pool core count
+    public static synchronized int getSharedPoolCoreCount() {
+        return sharedPoolCores.cardinality();
+    }
+
+    private static synchronized int tryPreemptCore(String requestingOwner) {
+        int requestingPriority = getThreadPriority(requestingOwner);
+
+        // Find lowest priority core that's lower than requesting priority
+        Optional<Map.Entry<Integer, String>> preemptableCore = coreOwners.entrySet().stream()
+                .filter(entry -> getThreadPriority(entry.getValue()) < requestingPriority)
+                .min(Comparator.comparingInt(entry -> getThreadPriority(entry.getValue())));
+
+        if (preemptableCore.isPresent()) {
+            int core = preemptableCore.get().getKey();
+            String currentOwner = preemptableCore.get().getValue();
+
+            // Add current owner to waiting queue
+            waitingThreads.offer(currentOwner);
+
+            // Update ownership
+            coreOwners.put(core, requestingOwner);
+            return core;
+        }
+
+        return -1;
     }
 
     public static synchronized int getAvailableCoreCount() {

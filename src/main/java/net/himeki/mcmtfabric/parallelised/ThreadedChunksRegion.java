@@ -7,7 +7,10 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import me.shedaniel.autoconfig.ConfigData;
 import me.shedaniel.autoconfig.annotation.ConfigEntry;
 import net.himeki.mcmtfabric.MCMT;
-import net.openhft.affinity.AffinityLock;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+
+import static net.himeki.mcmtfabric.parallelised.MCMTThreads.*;
 
 public class ThreadedChunksRegion implements ConfigData {
     private String name;
@@ -19,6 +22,10 @@ public class ThreadedChunksRegion implements ConfigData {
 
     @ConfigEntry.Gui.Excluded
     private transient ExecutorService singleThreadExecutor;
+
+    public void setAssignedCpuCore(int assignedCpuCore) {
+        this.assignedCpuCore = assignedCpuCore;
+    }
 
     @ConfigEntry.Gui.Excluded
     private transient int assignedCpuCore = -1;
@@ -89,6 +96,9 @@ public class ThreadedChunksRegion implements ConfigData {
     @ConfigEntry.Gui.Excluded
     public transient Set<String> currentTasks = ConcurrentHashMap.newKeySet();
 
+    @ConfigEntry.Gui.Excluded
+    private static final Logger LOGGER = LogManager.getLogger(ThreadedChunksRegion.class);
+
 
     public ThreadedChunksRegion() {
         // Default constructor required for serialization
@@ -116,56 +126,23 @@ public class ThreadedChunksRegion implements ConfigData {
         this.blockEntityTickPhaser = new Phaser(0);
     }
 
-    private ThreadFactory createNamedVirtualThreadFactory() {
-        return Thread.ofVirtual()
-                .name("Region-" + name + "-VirtualThread-", 0)
-                .factory();
-    }
-
-    private ThreadFactory createNamedPlatformThreadFactory() {
-        return Thread.ofPlatform()
-                .name("Region-" + name + "-PlatformThread-", 0)
-                .factory();
-    }
-
-    private ThreadFactory createNamedPlatformAffinityThreadFactory() {
-        return runnable -> {
-            int cpuCore = CPUCoreManager.acquireCore();
-            if (cpuCore == -1) {
-                throw new RuntimeException("No available CPU cores for thread affinity");
-            }
-            assignedCpuCore = cpuCore;
-            SharedThreadPools.adjustSharedPoolSize();
-
-            Thread thread = new Thread(() -> {
-                try (AffinityLock al = AffinityLock.acquireLock(cpuCore)) {
-                    runnable.run();
-                } finally {
-                    // Release the core when the executor is shutting down
-                }
-            }, "Region-" + name + "-PlatformThread");
-
-            thread.setDaemon(true);
-            return thread;
-        };
-    }
 
     public ExecutorService getSingleThreadExecutor() {
         if (singleThreadExecutor == null) {
-            String poolType = System.getProperty("MCMT_SINGLE_POOL_TYPE", "platform");
+            String poolType = System.getProperty("MCMT_SINGLE_POOL_TYPE", "platform").toLowerCase();
             switch (poolType) {
                 case "virtual":
-                    singleThreadExecutor = Executors.newSingleThreadExecutor(createNamedVirtualThreadFactory());
+                    singleThreadExecutor = Executors.newSingleThreadExecutor(createNamedVirtualThreadFactory("Region-" + name + "-VirtualThread-"));
                     break;
                 case "platform":
-                    singleThreadExecutor = Executors.newSingleThreadExecutor(createNamedPlatformThreadFactory());
+                    singleThreadExecutor = Executors.newSingleThreadExecutor(createNamedPlatformThreadFactory("Region-" + name + "-PlatformThread-"));
                     break;
                 case "affinity":
-                    singleThreadExecutor = Executors.newSingleThreadExecutor(createNamedPlatformAffinityThreadFactory());
+                    singleThreadExecutor = Executors.newSingleThreadExecutor(createNamedPlatformAffinityThreadFactoryForRegion(this));
                     break;
                 default:
                     MCMT.LOGGER.warn("Invalid MCMT_SINGLE_POOL_TYPE: {}. Using default 'platform'.", poolType);
-                    singleThreadExecutor = Executors.newSingleThreadExecutor(createNamedPlatformThreadFactory());
+                    singleThreadExecutor = Executors.newSingleThreadExecutor(createNamedPlatformThreadFactory("Region-" + name + "-PlatformThread-"));
             }
         }
         return singleThreadExecutor;
@@ -219,13 +196,14 @@ public class ThreadedChunksRegion implements ConfigData {
 
     public void shutdownExecutors() {
         if (singleThreadExecutor != null) {
-            singleThreadExecutor.shutdown();
-            singleThreadExecutor = null;
             if (assignedCpuCore != -1) {
-                CPUCoreManager.releaseCore(assignedCpuCore);
+                LOGGER.debug("Region {} releasing core {}", name, assignedCpuCore);
+                CPUCoreManager.releaseCore(assignedCpuCore, "REGION");
                 assignedCpuCore = -1;
                 SharedThreadPools.adjustSharedPoolSize();
             }
+            singleThreadExecutor.shutdown();
+            singleThreadExecutor = null;
         }
     }
 

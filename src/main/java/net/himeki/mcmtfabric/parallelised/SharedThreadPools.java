@@ -1,29 +1,60 @@
 package net.himeki.mcmtfabric.parallelised;
 
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.ThreadPoolExecutor;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.LinkedBlockingQueue;
-import java.util.concurrent.ThreadFactory;
+import net.himeki.mcmtfabric.MCMT;
+import net.openhft.affinity.AffinityLock;
+
+import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicInteger;
+
+import static net.himeki.mcmtfabric.parallelised.MCMTThreads.*;
+import static net.himeki.mcmtfabric.parallelised.MCMTThreads.createNamedPlatformThreadFactory;
 
 public class SharedThreadPools {
-    // Use fewer threads than CPU count to leave room for the main thread and other processes
-    private static final int THREAD_COUNT = Math.max(1, Runtime.getRuntime().availableProcessors() - 1);
-
-    // Single shared thread pool for all tick operations
     private static ThreadPoolExecutor sharedTickPool;
 
-    private static ThreadFactory createNamedThreadFactory(String prefix) {
-        return new ThreadFactory() {
-            private int count = 0;
+    private static class AffinityThreadFactory implements ThreadFactory {
+        private final String prefix;
+        private final AtomicInteger count = new AtomicInteger();
 
-            @Override
-            public Thread newThread(Runnable r) {
-                Thread t = new Thread(r, prefix + "-" + (++count));
-                t.setDaemon(true);
-                return t;
-            }
-        };
+        public AffinityThreadFactory(String prefix) {
+            this.prefix = prefix;
+        }
+
+        @Override
+        public Thread newThread(Runnable r) {
+            int cpuCore = CPUCoreManager.acquireCore("SHARED");  // Mark as shared pool thread
+
+            Thread thread = new Thread(r) {
+                private final int assignedCpuCore = cpuCore;
+                private AffinityLock affinityLock;
+
+                @Override
+                public void run() {
+                    try {
+                        if (assignedCpuCore != -1) {
+                            try {
+                                affinityLock = AffinityLock.acquireLock(assignedCpuCore);
+                            } catch (Exception e) {
+                                System.err.println("Failed to bind thread to CPU core " + assignedCpuCore + ": " + e.getMessage());
+                            }
+                        }
+                        super.run();
+                    } finally {
+                        if (affinityLock != null) {
+                            affinityLock.release();
+                            affinityLock = null;
+                        }
+                        if (assignedCpuCore != -1) {
+                            CPUCoreManager.releaseCore(assignedCpuCore, "SHARED");
+                        }
+                    }
+                }
+            };
+
+            thread.setName(prefix + "-" + count.incrementAndGet());
+            thread.setDaemon(true);
+            return thread;
+        }
     }
 
     public static synchronized ExecutorService getSharedTickPool() {
@@ -32,12 +63,23 @@ public class SharedThreadPools {
             int usedCores = CPUCoreManager.getUsedCoreCount();
             int availableCores = Math.max(1, totalCores - usedCores);
 
+            String poolType = System.getProperty("MCMT_SINGLE_POOL_TYPE", "platform").toLowerCase();
+            ThreadFactory threadFactory = switch (poolType) {
+                case "virtual" -> createNamedVirtualThreadFactory("MCMT-SharedTick-");
+                case "platform" -> createNamedPlatformThreadFactory("MCMT-SharedTick-");
+                case "affinity" -> new AffinityThreadFactory("MCMT-SharedTick");
+                default -> {
+                    MCMT.LOGGER.warn("Invalid MCMT_SINGLE_POOL_TYPE: {}. Using default 'platform' for shared pool.", poolType);
+                    yield createNamedPlatformThreadFactory("MCMT-SharedTick-");
+                }
+            };
+
             sharedTickPool = new ThreadPoolExecutor(
                     availableCores,
                     availableCores,
                     60L, TimeUnit.SECONDS,
                     new LinkedBlockingQueue<>(),
-                    createNamedThreadFactory("MCMT-SharedTick"),
+                    threadFactory,
                     new ThreadPoolExecutor.CallerRunsPolicy()
             );
         }
@@ -51,11 +93,8 @@ public class SharedThreadPools {
             int usedCores = CPUCoreManager.getUsedCoreCount();
             int availableCores = Math.max(1, totalCores - usedCores);
 
-            int currentCorePoolSize = sharedTickPool.getCorePoolSize();
-            int currentMaximumPoolSize = sharedTickPool.getMaximumPoolSize();
-
-            if (availableCores > currentMaximumPoolSize) {
-                // **Increasing** pool size
+            // When decreasing pool size, existing threads will naturally terminate and release their cores when idle
+            if (availableCores > sharedTickPool.getMaximumPoolSize()) {
                 sharedTickPool.setMaximumPoolSize(availableCores);
                 sharedTickPool.setCorePoolSize(availableCores);
             } else {
@@ -66,7 +105,7 @@ public class SharedThreadPools {
         }
     }
 
-    // These methods now all return the same shared pool
+    // These methods remain unchanged
     public static ExecutorService getSharedChunkTickPool() {
         return getSharedTickPool();
     }

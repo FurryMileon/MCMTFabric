@@ -49,6 +49,11 @@ public class ParallelProcessor {
     // List of ThreadedChunksRegion
     public static final List<ThreadedChunksRegion> threadedChunksRegions = new ArrayList<>();
 
+    private static final Set<ThreadedChunksRegion> pendingRegionsToAdd = ConcurrentHashMap.newKeySet();
+
+    private static final Set<ThreadedChunksRegion> pendingRegionsToRemove = ConcurrentHashMap.newKeySet();
+
+
     public static final ConcurrentHashMap<ServerWorld, WorldTickStats> worldTickStats = new ConcurrentHashMap<>();
 
     private static final Cache<ChunkPos, ThreadedChunksRegion> chunkRegionCache = Caffeine.newBuilder()
@@ -67,17 +72,15 @@ public class ParallelProcessor {
     }
 
     public static void addThreadedChunksRegion(ThreadedChunksRegion region) {
-        synchronized (threadedChunksRegions) {
-            threadedChunksRegions.add(region);
-            chunkRegionCache.invalidateAll(); // Invalidate cache when a new region is added
+        synchronized (pendingRegionsToAdd) {
+            pendingRegionsToAdd.add(region);
         }
     }
 
+
     public static void removeThreadedChunksRegion(ThreadedChunksRegion region) {
         synchronized (threadedChunksRegions) {
-            threadedChunksRegions.remove(region);
-            region.shutdownExecutors();
-            chunkRegionCache.invalidateAll(); // Invalidate cache when a region is removed
+            pendingRegionsToRemove.add(region);
         }
     }
 
@@ -121,20 +124,14 @@ public class ParallelProcessor {
         AtomicInteger worldPoolThreadID = new AtomicInteger();
         final ClassLoader cl = MCMT.class.getClassLoader();
         ForkJoinPool.ForkJoinWorkerThreadFactory worldThreadFactory = pool -> {
-            int cpuCore = CPUCoreManager.acquireCore();
-            if (cpuCore == -1) {
-                throw new RuntimeException("No available CPU cores for thread affinity");
-            }
-
             ForkJoinWorkerThread fjwt = new ForkJoinWorkerThread(pool) {
-                private final int assignedCpuCore = cpuCore;
+                private final int assignedCpuCore = CPUCoreManager.acquireCore("WORLD");  // Mark as region thread
                 private AffinityLock affinityLock;
 
                 @Override
                 protected void onStart() {
                     super.onStart();
                     try {
-                        // Step 2: Bind the thread to the CPU core
                         affinityLock = AffinityLock.acquireLock(assignedCpuCore);
                     } catch (Exception e) {
                         throw new RuntimeException("Failed to bind thread to CPU core " + assignedCpuCore, e);
@@ -148,8 +145,7 @@ public class ParallelProcessor {
                             affinityLock.release();
                             affinityLock = null;
                         }
-                        // Step 3: Release the CPU core back to CPUCoreManager
-                        CPUCoreManager.releaseCore(assignedCpuCore);
+                        CPUCoreManager.releaseCore(assignedCpuCore, "REGION");
                     } finally {
                         super.onTermination(exception);
                     }
@@ -202,10 +198,26 @@ public class ParallelProcessor {
                 mcs = server;
             }
         }
-        // Initialize phasers for all regions
-        synchronized (threadedChunksRegions) {
-            for (ThreadedChunksRegion region : threadedChunksRegions) {
-                region.initializePhaser();
+        // Process pending regions
+        synchronized (pendingRegionsToAdd) {
+            if (!pendingRegionsToAdd.isEmpty()) {
+                synchronized (threadedChunksRegions) {
+                    threadedChunksRegions.addAll(pendingRegionsToAdd);
+                    chunkRegionCache.invalidateAll();
+                    pendingRegionsToAdd.clear();
+                }
+            }
+            if (!pendingRegionsToRemove.isEmpty()) {
+                synchronized (threadedChunksRegions) {
+                    threadedChunksRegions.removeAll(pendingRegionsToRemove);
+                    synchronized (pendingRegionsToRemove) {
+                        for (ThreadedChunksRegion region : pendingRegionsToRemove) {
+                            region.shutdownExecutors();
+                        }
+                        chunkRegionCache.invalidateAll();
+                        pendingRegionsToRemove.clear();
+                    }
+                }
             }
         }
     }
@@ -330,7 +342,11 @@ public class ParallelProcessor {
                 matchingRegion.addChunkTickTime(duration); // Store execution time
             } finally {
                 matchingRegion.getChunkTickPhaser().arrive();
-                if (config.opsTracing) matchingRegion.currentTasks.remove(taskName);
+                if (config.opsTracing) {
+                    if (matchingRegion.currentTasks.stream().anyMatch(task -> (task.contains("Entity"))))
+                        LOGGER.debug("Mixed tasks detected");
+                    matchingRegion.currentTasks.remove(taskName);
+                }
             }
         });
     }
@@ -395,20 +411,21 @@ public class ParallelProcessor {
                 matchingRegion.getSingleThreadExecutor() :
                 matchingRegion.getEntityTickExecutor();
 
-        String taskName;
-        if (config.opsTracing) {
-            taskName = "EntityTick: " + entityIn;
-            matchingRegion.currentTasks.add(taskName);
-        } else {
-            taskName = "";
-        }
-
 
         matchingRegion.getEntityTickPhaser().register();
         executor.execute(() -> {
+            String taskName = null;
             try {
                 // Wait for chunk tick stage to complete in this region
                 matchingRegion.getChunkTickPhaser().awaitAdvance(0);
+
+                if (config.opsTracing) {
+                    taskName = "EntityTick: " + entityIn;
+                    matchingRegion.currentTasks.add(taskName);
+                } else {
+                    taskName = "";
+                }
+
                 matchingRegion.recordChunkStageDuration();
                 matchingRegion.recordEntityStageStart();
 
@@ -419,7 +436,11 @@ public class ParallelProcessor {
                 matchingRegion.addEntityTickTime(duration);
             } finally {
                 matchingRegion.getEntityTickPhaser().arrive();
-                if (config.opsTracing) matchingRegion.currentTasks.remove(taskName);
+                if (config.opsTracing) {
+                    if (matchingRegion.currentTasks.stream().anyMatch(task -> (task.startsWith("Chunk") || task.startsWith("Block"))))
+                        LOGGER.debug("Mixed tasks detected");
+                    matchingRegion.currentTasks.remove(taskName);
+                }
             }
         });
     }
@@ -435,7 +456,6 @@ public class ParallelProcessor {
             synchronized (threadedChunksRegions) {
                 for (ThreadedChunksRegion region : threadedChunksRegions) {
                     if (region.getWorldId().equals(world.getRegistryKey().getValue().toString())) {
-//                        region.getEntityTickPhaser().arriveAndDeregister();
                         region.getEntityTickPhaser().arrive();
                     }
                 }
@@ -494,19 +514,21 @@ public class ParallelProcessor {
                 matchingRegion.getSingleThreadExecutor() :
                 matchingRegion.getBlockEntityTickExecutor();
 
-        String taskName;
-        if (config.opsTracing) {
-            taskName = "BlockEntityTick: " + tte + "@" + tte.hashCode();
-            matchingRegion.currentTasks.add(taskName);
-        } else {
-            taskName = "";
-        }
 
         matchingRegion.getBlockEntityTickPhaser().register();
         executor.execute(() -> {
+            String taskName = null;
             try {
                 // Wait for entity tick stage to complete in this region
                 matchingRegion.getEntityTickPhaser().awaitAdvance(0);
+
+                if (config.opsTracing) {
+                    taskName = "BlockEntityTick: " + tte + "@" + tte.hashCode();
+                    matchingRegion.currentTasks.add(taskName);
+                } else {
+                    taskName = "";
+                }
+
                 matchingRegion.recordEntityStageDuration();
                 matchingRegion.recordBlockEntityStageStart();
 
@@ -517,7 +539,11 @@ public class ParallelProcessor {
                 matchingRegion.addBlockEntityTickTime(duration);
             } finally {
                 matchingRegion.getBlockEntityTickPhaser().arrive();
-                if (config.opsTracing) matchingRegion.currentTasks.remove(taskName);
+                if (config.opsTracing) {
+                    if (matchingRegion.currentTasks.stream().anyMatch(task -> (task.startsWith("Chunk") || task.startsWith("EntityTick"))))
+                        LOGGER.debug("Mixed tasks detected");
+                    matchingRegion.currentTasks.remove(taskName);
+                }
             }
         });
     }
@@ -551,6 +577,7 @@ public class ParallelProcessor {
                     // Main thread arrives
                     region.getBlockEntityTickPhaser().arriveAndAwaitAdvance();
                     region.recordBlockEntityStageDuration();
+                    region.initializePhaser();
                 }
             }
         }
