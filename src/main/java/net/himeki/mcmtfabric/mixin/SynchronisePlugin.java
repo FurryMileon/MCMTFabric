@@ -90,7 +90,8 @@ public class SynchronisePlugin implements IMixinConfigPlugin {
             for (MethodNode method : targetClass.methods) {
                 if ((method.access & negFilter) == 0 && !method.name.equals("<init>") && !excludedMethods.contains(method.name)) {
                     method.access |= Opcodes.ACC_SYNCHRONIZED;
-                    syncLogger.info("Setting synchronize bit for " + method.name + " in " + targetClassName + ".");
+                    if (!mixinClassName.equals("net.himeki.mcmtfabric.mixin.FastUtilsMixin"))
+                        syncLogger.info("Setting synchronize bit for " + method.name + " in " + targetClassName + ".");
                 }
             }
 

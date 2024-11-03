@@ -6,6 +6,7 @@
   "mixins": [
     "ChainRestrictedNeighborUpdaterMixin",
     "ChunkHolderMixin",
+    "ChunkLoaderMixin",
     "ChunkMixin",
     "ChunkTicketManagerMixin",
     "DedicatedServerWatchdogMixin",
