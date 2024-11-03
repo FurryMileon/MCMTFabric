@@ -355,13 +355,13 @@ public class ParallelProcessor {
     public static void postChunkTick(ServerWorld world) {
         synchronized (threadedChunksRegions) {
             for (ThreadedChunksRegion region : threadedChunksRegions) {
+                // Region's post-chunk-tick handler
                 if (region.getWorldId().equals(world.getRegistryKey().getValue().toString())) {
-                    region.getChunkTickPhaser().arrive();
-                    if (!(region.getChunkTickPhaser().getRegisteredParties() > 1))
-                        region.recordChunkStageEnd();
+                    region.getSingleThreadExecutor().execute(region::postChunkTick);
                 }
             }
         }
+
         if (!config.disabled && !config.disableEnvironment) {
             // Process delayed chunk tasks
             List<Runnable> tasks = delayedChunkTasks.remove(world);
@@ -429,7 +429,6 @@ public class ParallelProcessor {
                     taskName = "";
                 }
 
-                matchingRegion.recordChunkStageEnd();
                 matchingRegion.recordEntityStageStart();
 
                 long startTime = System.nanoTime();
@@ -455,16 +454,15 @@ public class ParallelProcessor {
     }
 
     public static void postEntityTick(ServerWorld world) {
-        if (!config.disabled && !config.disableEntity) {
-            synchronized (threadedChunksRegions) {
-                for (ThreadedChunksRegion region : threadedChunksRegions) {
-                    if (!(region.getEntityTickPhaser().getRegisteredParties() > 1)) {
-                        region.recordChunkStageEnd();   // No worker to wait for chunk stage end and record, so record here
-                    }
-                    if (region.getWorldId().equals(world.getRegistryKey().getValue().toString()))
-                        region.getEntityTickPhaser().arrive();
+        synchronized (threadedChunksRegions) {
+            for (ThreadedChunksRegion region : threadedChunksRegions) {
+                if (region.getWorldId().equals(world.getRegistryKey().getValue().toString())) {
+                    region.getSingleThreadExecutor().execute(region::postEntityTick);
                 }
             }
+        }
+
+        if (!config.disabled && !config.disableEntity) {
             // Process delayed entity tasks
             List<Runnable> tasks = delayedEntityTasks.remove(world);
             if (tasks != null) {
@@ -534,7 +532,6 @@ public class ParallelProcessor {
                     taskName = "";
                 }
 
-                matchingRegion.recordEntityStageEnd();
                 matchingRegion.recordBlockEntityStageStart();
 
                 long startTime = System.nanoTime();
@@ -562,6 +559,14 @@ public class ParallelProcessor {
     }
 
     public static void postBlockEntityTick(ServerWorld world) {
+        synchronized (threadedChunksRegions) {
+            for (ThreadedChunksRegion region : threadedChunksRegions) {
+                if (region.getWorldId().equals(world.getRegistryKey().getValue().toString())) {
+                    region.getSingleThreadExecutor().execute(region::postBlockEntityTick);
+                }
+            }
+        }
+
         if (!config.disabled && !config.disableTileEntity) {
             // Process delayed block entity tasks
             List<Runnable> tasks = delayedBlockEntityTasks.remove(world);
@@ -579,17 +584,12 @@ public class ParallelProcessor {
         synchronized (threadedChunksRegions) {
             for (ThreadedChunksRegion region : threadedChunksRegions) {
                 if (region.getWorldId().equals(world.getRegistryKey().getValue().toString())) {
-                    // Main thread arrives
-                    if (!(region.getBlockEntityTickPhaser().getRegisteredParties() > 1)) {
-                        region.getChunkTickPhaser().awaitAdvance(0);
-                        region.getEntityTickPhaser().awaitAdvance(0);
-                    }
-                    region.getBlockEntityTickPhaser().arriveAndAwaitAdvance();
-                    region.recordBlockEntityStageEnd();
+                    region.getBlockEntityTickPhaser().awaitAdvance(0);
                     region.initializePhaser();
                 }
             }
         }
+
     }
 
     public static boolean shouldThreadChunks() {

@@ -240,6 +240,28 @@ public class ThreadedChunksRegion implements ConfigData {
         this.source = source;
     }
 
+    public void postChunkTick() {
+        // Wait for chunk tick phaser
+        chunkTickPhaser.arriveAndAwaitAdvance();
+        recordChunkStageEnd(); // Record stop time for chunk stage
+    }
+
+    public void postEntityTick() {
+        // Ensure chunk stage has completed
+        chunkTickPhaser.awaitAdvance(0);
+        // Wait for entity tick phaser
+        entityTickPhaser.arriveAndAwaitAdvance();
+        recordEntityStageEnd(); // Record stop time for entity stage
+    }
+
+    public void postBlockEntityTick() {
+        // Ensure entity stage has completed
+        entityTickPhaser.awaitAdvance(0);
+        // Wait for block entity tick phaser
+        blockEntityTickPhaser.arriveAndAwaitAdvance();
+        recordBlockEntityStageEnd(); // Record stop time for block entity stage
+    }
+
     public long getArea() {
         // Calculate area of the region in chunks
         long width = Math.abs((long) x2 - x1) + 1;
