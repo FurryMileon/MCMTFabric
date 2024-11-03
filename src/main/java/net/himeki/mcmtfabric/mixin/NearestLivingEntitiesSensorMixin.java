@@ -1,27 +1,31 @@
 package net.himeki.mcmtfabric.mixin;
 
-import com.llamalad7.mixinextras.injector.ModifyExpressionValue;
+import net.minecraft.entity.Entity;
 import net.minecraft.entity.LivingEntity;
 import net.minecraft.entity.ai.brain.sensor.NearestLivingEntitiesSensor;
+import net.minecraft.server.world.ServerWorld;
+import net.minecraft.util.math.Vec3d;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
+import org.spongepowered.asm.mixin.injection.Redirect;
 
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Objects;
+import java.util.Comparator;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.function.ToDoubleFunction;
 
 @Mixin(NearestLivingEntitiesSensor.class)
 public class NearestLivingEntitiesSensorMixin<T extends LivingEntity> {
+    @Redirect(method = "sense", at = @At(value = "INVOKE", target = "Ljava/util/Comparator;comparingDouble(Ljava/util/function/ToDoubleFunction;)Ljava/util/Comparator;"))
+    private Comparator<LivingEntity> syncSense(ToDoubleFunction<? super LivingEntity> keyExtractor, ServerWorld world, T entity) {
+        Map<LivingEntity, Vec3d> positionCache = new HashMap<>();
 
-//    @WrapMethod(method = "sense")
-//    private synchronized void syncSense(ServerWorld world, T entity, Operation<Void> original) {
-//        original.call(world, entity);
-//    }
-
-    @ModifyExpressionValue(method = "sense", at = @At(value = "INVOKE", target = "Lnet/minecraft/server/world/ServerWorld;getEntitiesByClass(Ljava/lang/Class;Lnet/minecraft/util/math/Box;Ljava/util/function/Predicate;)Ljava/util/List;"))
-    private synchronized List<LivingEntity> syncSense(List<LivingEntity> original) {
-        return new ArrayList<>(original.stream()
-                .filter(Objects::nonNull)
-                .toList());
+        return (e1, e2) -> {
+            Vec3d pos1 = positionCache.computeIfAbsent(e1, Entity::getPos);
+            Vec3d pos2 = positionCache.computeIfAbsent(e2, Entity::getPos);
+            double dist1 = entity.squaredDistanceTo(pos1);
+            double dist2 = entity.squaredDistanceTo(pos2);
+            return Double.compare(dist1, dist2);
+        };
     }
 }
