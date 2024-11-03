@@ -4,6 +4,7 @@ import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
 import net.himeki.mcmtfabric.config.GeneralConfig;
 import net.himeki.mcmtfabric.debug.WorldTickStats;
+import net.himeki.mcmtfabric.parallelised.BotRegionManager;
 import net.himeki.mcmtfabric.parallelised.threads.CPUCoreManager;
 import net.himeki.mcmtfabric.parallelised.threads.SharedThreadPools;
 import net.himeki.mcmtfabric.parallelised.threads.ThreadedChunksRegion;
@@ -14,6 +15,7 @@ import net.minecraft.entity.FallingBlockEntity;
 import net.minecraft.entity.TntEntity;
 import net.minecraft.entity.passive.AllayEntity;
 import net.minecraft.server.MinecraftServer;
+import net.minecraft.server.network.ServerPlayerEntity;
 import net.minecraft.server.world.ServerWorld;
 import net.minecraft.util.math.ChunkPos;
 import net.minecraft.world.World;
@@ -406,7 +408,12 @@ public class ParallelProcessor {
         if (matchingRegion == null) {
             // No matching region, delay processing
             delayedEntityTasks.computeIfAbsent(serverworld, w -> new ArrayList<>())
-                    .add(() -> tickConsumer.accept(entityIn));
+                    .add(() -> {
+                        if (entityIn instanceof ServerPlayerEntity player) {
+                            BotRegionManager.checkAndManageBot(player);
+                        }
+                        tickConsumer.accept(entityIn);
+                    });
             return;
         }
 
@@ -432,7 +439,13 @@ public class ParallelProcessor {
                 matchingRegion.recordEntityStageStart();
 
                 long startTime = System.nanoTime();
+
+                if (entityIn instanceof ServerPlayerEntity player) {
+                    BotRegionManager.checkAndManageBot(player);
+                }
+
                 tickConsumer.accept(entityIn);
+
                 long endTime = System.nanoTime();
                 long duration = endTime - startTime;
                 matchingRegion.addEntityTickTime(duration);

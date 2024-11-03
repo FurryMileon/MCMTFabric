@@ -7,6 +7,7 @@ import net.fabricmc.api.ModInitializer;
 import net.fabricmc.fabric.api.client.rendering.v1.EntityRendererRegistry;
 import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
+import net.fabricmc.fabric.api.networking.v1.ServerPlayConnectionEvents;
 import net.fabricmc.fabric.api.object.builder.v1.entity.FabricDefaultAttributeRegistry;
 import net.himeki.mcmtfabric.commands.ConfigCommand;
 import net.himeki.mcmtfabric.commands.StatsCommand;
@@ -17,6 +18,7 @@ import net.himeki.mcmtfabric.debug.MSPT10DebugBlockEntity;
 import net.himeki.mcmtfabric.debug.MSPT10DebugEntity;
 import net.himeki.mcmtfabric.debug.MSPT10DebugEntityRenderer;
 import net.himeki.mcmtfabric.jmx.JMXRegistration;
+import net.himeki.mcmtfabric.parallelised.BotRegionManager;
 import net.himeki.mcmtfabric.serdes.SerDesRegistry;
 import net.minecraft.block.AbstractBlock;
 import net.minecraft.block.entity.BlockEntityType;
@@ -122,5 +124,10 @@ public class MCMT implements ModInitializer {
         // Listener reg begin
         ServerLifecycleEvents.SERVER_STARTED.register(server -> StatsCommand.resetAll());
         CommandRegistrationCallback.EVENT.register((dispatcher, registryAccess, environment) -> ConfigCommand.register(dispatcher));
+
+        ServerPlayConnectionEvents.DISCONNECT.register((handler, server) ->
+                BotRegionManager.cleanup(handler.player.getName().toString()));
+
+        LOGGER.info("MCMT Initialized");
     }
 }
