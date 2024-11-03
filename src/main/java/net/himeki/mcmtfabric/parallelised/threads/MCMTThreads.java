@@ -1,4 +1,4 @@
-package net.himeki.mcmtfabric.parallelised;
+package net.himeki.mcmtfabric.parallelised.threads;
 
 import net.openhft.affinity.AffinityLock;
 import org.apache.logging.log4j.LogManager;

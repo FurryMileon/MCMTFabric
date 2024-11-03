@@ -1,4 +1,4 @@
-package net.himeki.mcmtfabric.parallelised;
+package net.himeki.mcmtfabric.parallelised.threads;
 
 import net.himeki.mcmtfabric.MCMT;
 import net.openhft.affinity.AffinityLock;
@@ -6,8 +6,8 @@ import net.openhft.affinity.AffinityLock;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
 
-import static net.himeki.mcmtfabric.parallelised.MCMTThreads.*;
-import static net.himeki.mcmtfabric.parallelised.MCMTThreads.createNamedPlatformThreadFactory;
+import static net.himeki.mcmtfabric.parallelised.threads.MCMTThreads.*;
+import static net.himeki.mcmtfabric.parallelised.threads.MCMTThreads.createNamedPlatformThreadFactory;
 
 public class SharedThreadPools {
     private static ThreadPoolExecutor sharedTickPool;

@@ -1,4 +1,4 @@
-package net.himeki.mcmtfabric.parallelised;
+package net.himeki.mcmtfabric.parallelised.threads;
 
 import java.io.IOException;
 import java.nio.file.Files;

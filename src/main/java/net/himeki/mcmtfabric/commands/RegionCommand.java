@@ -13,7 +13,7 @@ import me.shedaniel.autoconfig.AutoConfig;
 import net.himeki.mcmtfabric.ParallelProcessor;
 import net.himeki.mcmtfabric.config.ThreadedRegionsConfig;
 import net.himeki.mcmtfabric.debug.WorldTickStats;
-import net.himeki.mcmtfabric.parallelised.ThreadedChunksRegion;
+import net.himeki.mcmtfabric.parallelised.threads.ThreadedChunksRegion;
 import net.minecraft.command.argument.RegistryKeyArgumentType;
 import net.minecraft.registry.RegistryKey;
 import net.minecraft.registry.RegistryKeys;

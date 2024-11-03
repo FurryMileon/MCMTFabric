@@ -1,4 +1,4 @@
-package net.himeki.mcmtfabric.parallelised;
+package net.himeki.mcmtfabric.parallelised.threads;
 
 import java.util.Set;
 import java.util.concurrent.*;
@@ -10,7 +10,7 @@ import net.himeki.mcmtfabric.MCMT;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
-import static net.himeki.mcmtfabric.parallelised.MCMTThreads.*;
+import static net.himeki.mcmtfabric.parallelised.threads.MCMTThreads.*;
 
 public class ThreadedChunksRegion implements ConfigData {
     private String name;
