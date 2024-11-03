@@ -1,14 +1,13 @@
 package net.himeki.mcmtfabric.mixin;
 
-import com.llamalad7.mixinextras.injector.wrapmethod.WrapMethod;
-import com.llamalad7.mixinextras.injector.wrapoperation.Operation;
 import com.mojang.datafixers.DataFixer;
 import it.unimi.dsi.fastutil.ints.Int2ObjectMap;
+import it.unimi.dsi.fastutil.longs.LongSet;
+import net.himeki.mcmtfabric.parallelised.fastutil.ConcurrentLongLinkedOpenHashSet;
 import net.himeki.mcmtfabric.parallelised.fastutil.Int2ObjectConcurrentHashMap;
 import net.minecraft.server.world.ChunkHolder;
 import net.minecraft.server.world.ServerChunkLoadingManager;
 import net.minecraft.world.ChunkLoadingManager;
-import net.minecraft.world.chunk.AbstractChunkHolder;
 import net.minecraft.world.chunk.ChunkLoader;
 import net.minecraft.world.storage.StorageKey;
 import net.minecraft.world.storage.VersionedChunkStorage;
@@ -39,9 +38,9 @@ public abstract class ServerChunkLoadingManagerMixin extends VersionedChunkStora
     @Mutable
     private List<ChunkLoader> loaders = new CopyOnWriteArrayList<>();
 
+    @Shadow
+    @Final
+    @Mutable
+    final LongSet unloadedChunks = new ConcurrentLongLinkedOpenHashSet();
 
-    @WrapMethod(method = "release")
-    private synchronized void release(AbstractChunkHolder chunkHolder, Operation<Void> original) {
-        original.call(chunkHolder);
-    }
 }
