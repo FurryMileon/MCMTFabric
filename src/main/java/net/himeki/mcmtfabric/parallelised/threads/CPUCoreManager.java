@@ -186,11 +186,16 @@ public class CPUCoreManager {
     }
 
     // Modified to exclude shared pool cores
-    public static synchronized int getUsedCoreCount() {
+    public static synchronized int getUsedCoreCountForSharedPool() {
         BitSet nonSharedCores = new BitSet(MAX_CORES);
         nonSharedCores.or(usedCores);
         nonSharedCores.andNot(sharedPoolCores);
         return nonSharedCores.cardinality();
+    }
+
+    // Modified to exclude shared pool cores
+    public static synchronized int getUsedCoreCount() {
+        return usedCores.cardinality();
     }
 
     // Add method to get total used cores including shared pool
@@ -203,10 +208,39 @@ public class CPUCoreManager {
         return sharedPoolCores.cardinality();
     }
 
+    public static synchronized boolean isSharedPoolCore(int core) {
+        return sharedPoolCores.get(core);
+    }
+
     private static synchronized int tryPreemptCore(String requestingOwner) {
         int requestingPriority = getThreadPriority(requestingOwner);
 
-        // Find lowest priority core that's lower than requesting priority
+        // First try to find a core that's already been released by the shared pool
+        Optional<Map.Entry<Integer, String>> sharedCore = coreOwners.entrySet().stream()
+                .filter(entry -> "SHARED".equals(entry.getValue()))
+                .filter(entry -> !SharedThreadPools.coreToThreadMap.containsKey(entry.getKey()))
+                .findFirst();
+
+        if (sharedCore.isPresent()) {
+            int core = sharedCore.get().getKey();
+            coreOwners.put(core, requestingOwner);
+            return core;
+        }
+
+        // If no already-released shared cores are available, try to decrease shared pool size
+        if (sharedPoolCores.cardinality() > 0) {
+            Set<Integer> releasedCores = SharedThreadPools.decreasePoolSize(
+                    Math.max(1, sharedPoolCores.cardinality() - 1)
+            );
+
+            if (!releasedCores.isEmpty()) {
+                int core = releasedCores.iterator().next();
+                coreOwners.put(core, requestingOwner);
+                return core;
+            }
+        }
+
+        // If still no cores available, try normal preemption
         Optional<Map.Entry<Integer, String>> preemptableCore = coreOwners.entrySet().stream()
                 .filter(entry -> getThreadPriority(entry.getValue()) < requestingPriority)
                 .min(Comparator.comparingInt(entry -> getThreadPriority(entry.getValue())));

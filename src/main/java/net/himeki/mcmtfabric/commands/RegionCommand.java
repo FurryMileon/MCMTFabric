@@ -264,10 +264,9 @@ public class RegionCommand {
         String name = StringArgumentType.getString(cmdCtx, "name");
         boolean enabled = BoolArgumentType.getBool(cmdCtx, "enabled");
 
-        ThreadedRegionsConfig regionsConfig = AutoConfig.getConfigHolder(ThreadedRegionsConfig.class).getConfig();
         ThreadedChunksRegion targetRegion = null;
 
-        for (ThreadedChunksRegion region : regionsConfig.threadedChunksRegions) {
+        for (ThreadedChunksRegion region : ParallelProcessor.threadedChunksRegions) {
             if (region.getName().equals(name)) {
                 targetRegion = region;
                 break;
@@ -300,16 +299,15 @@ public class RegionCommand {
     }
 
     private static int executeListCompact(CommandContext<ServerCommandSource> cmdCtx) {
-        ThreadedRegionsConfig regionsConfig = AutoConfig.getConfigHolder(ThreadedRegionsConfig.class).getConfig();
 
-        if (regionsConfig.threadedChunksRegions == null || regionsConfig.threadedChunksRegions.isEmpty()) {
+        if (ParallelProcessor.threadedChunksRegions.isEmpty()) {
             cmdCtx.getSource().sendFeedback(() -> Text.literal("No threaded regions configured."), false);
             return 0;
         }
 
         cmdCtx.getSource().sendFeedback(() -> Text.literal("=== Regions | C: ChunkTick, E: EntityTick, B: BlockEntityTick ==="), false);
 
-        for (ThreadedChunksRegion region : regionsConfig.threadedChunksRegions) {
+        for (ThreadedChunksRegion region : ParallelProcessor.threadedChunksRegions) {
             // Extract world path from full ID (e.g., "minecraft:overworld" -> "overworld")
             String worldPath = region.getWorldId().substring(region.getWorldId().lastIndexOf(':') + 1);
 
@@ -331,16 +329,15 @@ public class RegionCommand {
     }
 
     private static int executeList(CommandContext<ServerCommandSource> cmdCtx) {
-        ThreadedRegionsConfig regionsConfig = AutoConfig.getConfigHolder(ThreadedRegionsConfig.class).getConfig();
 
-        if (regionsConfig.threadedChunksRegions == null || regionsConfig.threadedChunksRegions.isEmpty()) {
+        if (ParallelProcessor.threadedChunksRegions.isEmpty()) {
             cmdCtx.getSource().sendFeedback(() -> Text.literal("No threaded regions configured."), false);
             return 0;
         }
 
         cmdCtx.getSource().sendFeedback(() -> Text.literal("=== Configured Regions ==="), false);
 
-        for (ThreadedChunksRegion region : regionsConfig.threadedChunksRegions) {
+        for (ThreadedChunksRegion region : ParallelProcessor.threadedChunksRegions) {
             String regionInfo = String.format(
                     "§6%s§r: %s (%d, %d) to (%d, %d)\n" +
                             "   §7Chunk tick: %s, Entity tick: %s, Block Entity tick: %s§r",
@@ -361,15 +358,12 @@ public class RegionCommand {
 
     private static int executeShow(CommandContext<ServerCommandSource> cmdCtx) {
         String name = StringArgumentType.getString(cmdCtx, "name");
-        ThreadedRegionsConfig regionsConfig = AutoConfig.getConfigHolder(ThreadedRegionsConfig.class).getConfig();
 
         ThreadedChunksRegion targetRegion = null;
-        if (regionsConfig.threadedChunksRegions != null) {
-            for (ThreadedChunksRegion region : regionsConfig.threadedChunksRegions) {
-                if (region.getName().equals(name)) {
-                    targetRegion = region;
-                    break;
-                }
+        for (ThreadedChunksRegion region : ParallelProcessor.threadedChunksRegions) {
+            if (region.getName().equals(name)) {
+                targetRegion = region;
+                break;
             }
         }
 
@@ -437,8 +431,7 @@ public class RegionCommand {
     }
 
     private static CompletableFuture<Suggestions> suggestRegionNames(ServerCommandSource source, SuggestionsBuilder builder) {
-        ThreadedRegionsConfig regionsConfig = AutoConfig.getConfigHolder(ThreadedRegionsConfig.class).getConfig();
-        for (ThreadedChunksRegion region : regionsConfig.threadedChunksRegions) {
+        for (ThreadedChunksRegion region : ParallelProcessor.threadedChunksRegions) {
             builder.suggest(region.getName());
         }
         return builder.buildFuture();

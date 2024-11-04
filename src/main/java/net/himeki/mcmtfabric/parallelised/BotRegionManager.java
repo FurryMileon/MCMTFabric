@@ -66,7 +66,7 @@ public class BotRegionManager {
     }
 
     private static boolean isBotPlayer(ServerPlayerEntity player) {
-        return player.getName().getString().startsWith("bot_");
+        return player.getName().getString().toLowerCase().startsWith("bot_");
     }
 
     private static void createInitialRegion(String botId, ChunkPos pos, String worldId, int viewDistance) {
