@@ -7,9 +7,6 @@ import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
 
-import static net.himeki.mcmtfabric.parallelised.threads.MCMTThreads.*;
-import static net.himeki.mcmtfabric.parallelised.threads.MCMTThreads.createNamedPlatformThreadFactory;
-
 public class SharedThreadPools {
     private static ThreadPoolExecutor sharedTickPool;
     static final Map<Integer, Thread> coreToThreadMap = new ConcurrentHashMap<>();
@@ -61,33 +58,12 @@ public class SharedThreadPools {
     }
 
 
+    public static synchronized ExecutorService getSharedAffinityTickPool() {
+        return GlobalAffinityThreadPool.getAffinityThreadPool();
+    }
+
     public static synchronized ExecutorService getSharedTickPool() {
-        if (sharedTickPool == null || sharedTickPool.isShutdown()) {
-            int totalCores = Math.max(1, Runtime.getRuntime().availableProcessors() - 2);
-            int usedCores = CPUCoreManager.getUsedCoreCountForSharedPool();
-            int availableCores = Math.max(1, totalCores - usedCores);
-
-            String poolType = System.getProperty("MCMT_SINGLE_POOL_TYPE", "platform").toLowerCase();
-            ThreadFactory threadFactory = switch (poolType) {
-                case "virtual" -> createNamedVirtualThreadFactory("MCMT-SharedTick-");
-                case "platform" -> createNamedPlatformThreadFactory("MCMT-SharedTick-");
-                case "affinity" -> new AffinityThreadFactory("MCMT-SharedTick");
-                default -> {
-                    MCMT.LOGGER.warn("Invalid MCMT_SINGLE_POOL_TYPE: {}. Using default 'platform' for shared pool.", poolType);
-                    yield createNamedPlatformThreadFactory("MCMT-SharedTick-");
-                }
-            };
-
-            sharedTickPool = new ThreadPoolExecutor(
-                    availableCores,
-                    availableCores,
-                    60L, TimeUnit.SECONDS,
-                    new LinkedBlockingQueue<>(),
-                    threadFactory,
-                    new ThreadPoolExecutor.CallerRunsPolicy()
-            );
-        }
-        return sharedTickPool;
+        return GlobalAffinityThreadPool.getAffinityThreadPool();
     }
 
     // Method to gracefully decrease pool size and return released cores
@@ -155,38 +131,19 @@ public class SharedThreadPools {
     }
 
     public static synchronized void adjustSharedPoolSize() {
-        if (sharedTickPool != null && !sharedTickPool.isShutdown()) {
-            int totalCores = Math.max(1, Runtime.getRuntime().availableProcessors() - 2);
-            int usedCores = CPUCoreManager.getUsedCoreCountForSharedPool();
-            int targetSize = Math.max(1, totalCores - usedCores);
-
-            if (targetSize < sharedTickPool.getPoolSize()) {
-                // Decrease pool size and get released cores
-                Set<Integer> releasedCores = decreasePoolSize(targetSize);
-
-                // Update CPU core manager with actually released cores
-                for (Integer core : releasedCores) {
-                    CPUCoreManager.releaseCore(core, "SHARED");
-                }
-            } else if (targetSize > sharedTickPool.getMaximumPoolSize()) {
-                // Increasing pool size
-                sharedTickPool.setMaximumPoolSize(targetSize);
-                sharedTickPool.setCorePoolSize(targetSize);
-            }
-        }
     }
 
     // These methods remain unchanged
     public static ExecutorService getSharedChunkTickPool() {
-        return getSharedTickPool();
+        return getSharedAffinityTickPool();
     }
 
     public static ExecutorService getSharedEntityTickPool() {
-        return getSharedTickPool();
+        return getSharedAffinityTickPool();
     }
 
     public static ExecutorService getSharedBlockEntityTickPool() {
-        return getSharedTickPool();
+        return getSharedAffinityTickPool();
     }
 
     public static void shutdownAll() {

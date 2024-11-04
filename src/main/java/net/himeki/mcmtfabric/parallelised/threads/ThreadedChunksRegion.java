@@ -21,7 +21,10 @@ public class ThreadedChunksRegion implements ConfigData {
     public String worldId;
 
     @ConfigEntry.Gui.Excluded
-    private transient ExecutorService singleThreadExecutor;
+    private transient Executor singleThreadExecutor;
+
+    @ConfigEntry.Gui.Excluded
+    private transient Executor serialExecutor;
 
     public void setAssignedCpuCore(int assignedCpuCore) {
         this.assignedCpuCore = assignedCpuCore;
@@ -127,7 +130,7 @@ public class ThreadedChunksRegion implements ConfigData {
     }
 
 
-    public ExecutorService getSingleThreadExecutor() {
+    public Executor getSingleThreadExecutor() {
         if (singleThreadExecutor == null) {
             String poolType = System.getProperty("MCMT_SINGLE_POOL_TYPE", "platform").toLowerCase();
             switch (poolType) {
@@ -138,7 +141,8 @@ public class ThreadedChunksRegion implements ConfigData {
                     singleThreadExecutor = Executors.newSingleThreadExecutor(createNamedPlatformThreadFactory("Region-" + name + "-PlatformThread-"));
                     break;
                 case "affinity":
-                    singleThreadExecutor = Executors.newSingleThreadExecutor(createNamedPlatformAffinityThreadFactoryForRegion(this));
+//                    singleThreadExecutor = Executors.newSingleThreadExecutor(createNamedPlatformAffinityThreadFactoryForRegion(this));
+                    singleThreadExecutor = getAffinitySerialExecutor();
                     break;
                 default:
                     MCMT.LOGGER.warn("Invalid MCMT_SINGLE_POOL_TYPE: {}. Using default 'platform'.", poolType);
@@ -148,23 +152,30 @@ public class ThreadedChunksRegion implements ConfigData {
         return singleThreadExecutor;
     }
 
+    public Executor getAffinitySerialExecutor() {
+        if (serialExecutor == null) {
+            serialExecutor = new SerialExecutor(GlobalAffinityThreadPool.getAffinityThreadPool());
+        }
+        return serialExecutor;
+    }
+
     public boolean contains(String worldId, int x, int z) {
         return this.worldId.equals(worldId) && x >= x1 && x <= x2 && z >= z1 && z <= z2;
     }
 
-    public ExecutorService getChunkTickExecutor() {
+    public Executor getChunkTickExecutor() {
         return multiThreadChunkTick ?
                 SharedThreadPools.getSharedChunkTickPool() :
                 getSingleThreadExecutor();
     }
 
-    public ExecutorService getEntityTickExecutor() {
+    public Executor getEntityTickExecutor() {
         return multiThreadEntityTick ?
                 SharedThreadPools.getSharedEntityTickPool() :
                 getSingleThreadExecutor();
     }
 
-    public ExecutorService getBlockEntityTickExecutor() {
+    public Executor getBlockEntityTickExecutor() {
         return multiThreadBlockEntityTick ?
                 SharedThreadPools.getSharedBlockEntityTickPool() :
                 getSingleThreadExecutor();
@@ -202,7 +213,7 @@ public class ThreadedChunksRegion implements ConfigData {
                 assignedCpuCore = -1;
                 SharedThreadPools.adjustSharedPoolSize();
             }
-            singleThreadExecutor.shutdown();
+//            singleThreadExecutor.shutdown();
             singleThreadExecutor = null;
         }
     }

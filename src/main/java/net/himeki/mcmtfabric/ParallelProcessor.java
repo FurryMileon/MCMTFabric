@@ -5,7 +5,7 @@ import com.github.benmanes.caffeine.cache.Caffeine;
 import net.himeki.mcmtfabric.config.GeneralConfig;
 import net.himeki.mcmtfabric.debug.WorldTickStats;
 import net.himeki.mcmtfabric.parallelised.BotRegionManager;
-import net.himeki.mcmtfabric.parallelised.threads.CPUCoreManager;
+import net.himeki.mcmtfabric.parallelised.threads.GlobalAffinityThreadPool;
 import net.himeki.mcmtfabric.parallelised.threads.SharedThreadPools;
 import net.himeki.mcmtfabric.parallelised.threads.ThreadedChunksRegion;
 import net.himeki.mcmtfabric.serdes.pools.PostExecutePool;
@@ -21,7 +21,6 @@ import net.minecraft.util.math.ChunkPos;
 import net.minecraft.world.World;
 import net.minecraft.world.chunk.BlockEntityTickInvoker;
 import net.minecraft.world.chunk.WorldChunk;
-import net.openhft.affinity.AffinityLock;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
@@ -122,46 +121,9 @@ public class ParallelProcessor {
     }
 
     public static void setupThreadPool(int parallelism) {
-        SharedThreadPools.getSharedTickPool();
+        SharedThreadPools.getSharedAffinityTickPool();
 
-        AtomicInteger worldPoolThreadID = new AtomicInteger();
-        final ClassLoader cl = MCMT.class.getClassLoader();
-        ForkJoinPool.ForkJoinWorkerThreadFactory worldThreadFactory = pool -> {
-            ForkJoinWorkerThread fjwt = new ForkJoinWorkerThread(pool) {
-                private final int assignedCpuCore = CPUCoreManager.acquireCore("WORLD");  // Mark as region thread
-                private AffinityLock affinityLock;
-
-                @Override
-                protected void onStart() {
-                    super.onStart();
-                    try {
-                        affinityLock = AffinityLock.acquireLock(assignedCpuCore);
-                    } catch (Exception e) {
-                        throw new RuntimeException("Failed to bind thread to CPU core " + assignedCpuCore, e);
-                    }
-                }
-
-                @Override
-                protected void onTermination(Throwable exception) {
-                    try {
-                        if (affinityLock != null) {
-                            affinityLock.release();
-                            affinityLock = null;
-                        }
-                        CPUCoreManager.releaseCore(assignedCpuCore, "REGION");
-                    } finally {
-                        super.onTermination(exception);
-                    }
-                }
-            };
-
-            fjwt.setName("MCMT-World-Pool-Thread-" + worldPoolThreadID.getAndIncrement());
-            regThread("MCMT-World", fjwt);
-            fjwt.setContextClassLoader(cl);
-            return fjwt;
-        };
-
-        worldPool = new ForkJoinPool(Math.min(3, Math.max(parallelism / 2, 1)), worldThreadFactory, null, true);
+        worldPool = GlobalAffinityThreadPool.getAffinityThreadPool();
     }
 
     // Statistics
@@ -321,7 +283,7 @@ public class ParallelProcessor {
             return;
         }
 
-        ExecutorService executor = matchingRegion.getChunkTickExecutor();
+        Executor executor = matchingRegion.getChunkTickExecutor();
 
         String taskName;
         if (config.opsTracing) {
@@ -359,7 +321,7 @@ public class ParallelProcessor {
             for (ThreadedChunksRegion region : threadedChunksRegions) {
                 // Region's post-chunk-tick handler
                 if (region.getWorldId().equals(world.getRegistryKey().getValue().toString())) {
-                    region.getSingleThreadExecutor().execute(region::postChunkTick);
+                    SharedThreadPools.getSharedAffinityTickPool().execute(region::postChunkTick);
                 }
             }
         }
@@ -417,7 +379,7 @@ public class ParallelProcessor {
             return;
         }
 
-        ExecutorService executor = shouldUseSingleThread(entityIn) ?
+        Executor executor = shouldUseSingleThread(entityIn) ?
                 matchingRegion.getSingleThreadExecutor() :
                 matchingRegion.getEntityTickExecutor();
 
@@ -470,7 +432,8 @@ public class ParallelProcessor {
         synchronized (threadedChunksRegions) {
             for (ThreadedChunksRegion region : threadedChunksRegions) {
                 if (region.getWorldId().equals(world.getRegistryKey().getValue().toString())) {
-                    region.getSingleThreadExecutor().execute(region::postEntityTick);
+                    SharedThreadPools.getSharedAffinityTickPool().execute(region::postEntityTick);
+
                 }
             }
         }
@@ -526,7 +489,7 @@ public class ParallelProcessor {
             return;
         }
 
-        ExecutorService executor = shouldUseSingleThread(blockEntity) ?
+        Executor executor = shouldUseSingleThread(blockEntity) ?
                 matchingRegion.getSingleThreadExecutor() :
                 matchingRegion.getBlockEntityTickExecutor();
 
@@ -575,7 +538,7 @@ public class ParallelProcessor {
         synchronized (threadedChunksRegions) {
             for (ThreadedChunksRegion region : threadedChunksRegions) {
                 if (region.getWorldId().equals(world.getRegistryKey().getValue().toString())) {
-                    region.getSingleThreadExecutor().execute(region::postBlockEntityTick);
+                    SharedThreadPools.getSharedAffinityTickPool().execute(region::postBlockEntityTick);
                 }
             }
         }
