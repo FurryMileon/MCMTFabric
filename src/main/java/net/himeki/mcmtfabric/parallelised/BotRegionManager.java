@@ -88,9 +88,9 @@ public class BotRegionManager {
         );
 
         // Enable multi-threading for all operations by default for bot regions
-        region.setMultiThreadChunkTick(true);
-        region.setMultiThreadEntityTick(true);
-        region.setMultiThreadBlockEntityTick(true);
+        region.setMultiThreadChunkTick(false);
+        region.setMultiThreadEntityTick(false);
+        region.setMultiThreadBlockEntityTick(false);
 
         botRegions.put(botId, region);
         ParallelProcessor.addThreadedChunksRegion(region);

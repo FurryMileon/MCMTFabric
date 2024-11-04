@@ -1,6 +1,5 @@
 package net.himeki.mcmtfabric.parallelised.threads;
 
-import net.himeki.mcmtfabric.MCMT;
 import net.openhft.affinity.AffinityLock;
 
 import java.util.*;
@@ -8,7 +7,7 @@ import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
 
 public class SharedThreadPools {
-    private static ThreadPoolExecutor sharedTickPool;
+    private static Executor sharedTickPool;
     static final Map<Integer, Thread> coreToThreadMap = new ConcurrentHashMap<>();
     private static final Object poolSizeLock = new Object();
 
@@ -62,102 +61,29 @@ public class SharedThreadPools {
         return GlobalAffinityThreadPool.getAffinityThreadPool();
     }
 
-    public static synchronized ExecutorService getSharedTickPool() {
-        return GlobalAffinityThreadPool.getAffinityThreadPool();
+    public static synchronized Executor getSharedTickPool() {
+//        return GlobalAffinityThreadPool.getAffinityThreadPool();
+        if (sharedTickPool == null) {
+            sharedTickPool = Executors.newThreadPerTaskExecutor(MCMTThreads.createNamedVirtualThreadFactory("MCMT-VirtualSharedThread"));
+        }
+        return sharedTickPool;
     }
 
-    // Method to gracefully decrease pool size and return released cores
-    public static synchronized Set<Integer> decreasePoolSize(int targetSize) {
-        if (sharedTickPool == null || sharedTickPool.isShutdown()) {
-            return Collections.emptySet();
-        }
-
-        Set<Integer> releasedCores = new HashSet<>();
-        int currentSize = sharedTickPool.getPoolSize();
-
-        if (currentSize <= targetSize) {
-            return releasedCores;
-        }
-
-        // Create a latch to wait for pool size reduction
-        CountDownLatch sizeLatch = new CountDownLatch(currentSize - targetSize);
-
-        // Set up a temporary thread factory that tracks thread completion
-        ThreadFactory originalFactory = sharedTickPool.getThreadFactory();
-        sharedTickPool.setThreadFactory(r -> {
-            Thread t = originalFactory.newThread(() -> {
-                try {
-                    r.run();
-                } finally {
-                    sizeLatch.countDown();
-                }
-            });
-            return t;
-        });
-
-        // Decrease pool size
-        sharedTickPool.setCorePoolSize(targetSize);
-        sharedTickPool.setMaximumPoolSize(targetSize);
-
-        try {
-            // Wait for up to 5 seconds for threads to naturally complete
-            if (!sizeLatch.await(5, TimeUnit.SECONDS)) {
-                MCMT.LOGGER.warn("Timeout waiting for thread pool size reduction");
-            }
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-        }
-
-        // Restore original thread factory
-        sharedTickPool.setThreadFactory(originalFactory);
-
-        // Collect cores that were actually released
-        synchronized (coreToThreadMap) {
-            List<Integer> coresToRemove = new ArrayList<>();
-            for (Map.Entry<Integer, Thread> entry : coreToThreadMap.entrySet()) {
-                Thread thread = entry.getValue();
-                if (!thread.isAlive() || thread.isInterrupted()) {
-                    coresToRemove.add(entry.getKey());
-                }
-            }
-
-            for (Integer core : coresToRemove) {
-                coreToThreadMap.remove(core);
-                releasedCores.add(core);
-            }
-        }
-
-        return releasedCores;
-    }
 
     public static synchronized void adjustSharedPoolSize() {
     }
 
     // These methods remain unchanged
-    public static ExecutorService getSharedChunkTickPool() {
-        return getSharedAffinityTickPool();
+    public static Executor getSharedChunkTickPool() {
+        return getSharedTickPool();
     }
 
-    public static ExecutorService getSharedEntityTickPool() {
-        return getSharedAffinityTickPool();
+    public static Executor getSharedEntityTickPool() {
+        return getSharedTickPool();
     }
 
-    public static ExecutorService getSharedBlockEntityTickPool() {
-        return getSharedAffinityTickPool();
-    }
-
-    public static void shutdownAll() {
-        if (sharedTickPool != null) {
-            sharedTickPool.shutdown();
-            try {
-                // Wait for tasks to complete on shutdown
-                if (!sharedTickPool.awaitTermination(5, TimeUnit.SECONDS)) {
-                    sharedTickPool.shutdownNow();
-                }
-            } catch (InterruptedException e) {
-                sharedTickPool.shutdownNow();
-            }
-        }
+    public static Executor getSharedBlockEntityTickPool() {
+        return getSharedTickPool();
     }
 
     // Optional: Method to monitor thread pool statistics

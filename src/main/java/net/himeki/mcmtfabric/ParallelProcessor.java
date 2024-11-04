@@ -108,9 +108,22 @@ public class ParallelProcessor {
                 String worldId = world.getRegistryKey().getValue().toString();
 
                 // Single stream operation to find the smallest matching region
+                // with preference for non-bot regions
                 return threadedChunksRegions.stream()
                         .filter(region -> region.contains(worldId, chunkX, chunkZ))
                         .min((r1, r2) -> {
+                            // First, compare based on bot region prefix
+                            boolean isBot1 = r1.getName().startsWith("bot_region_");
+                            boolean isBot2 = r2.getName().startsWith("bot_region_");
+
+                            if (isBot1 != isBot2) {
+                                // If one is a bot region and the other isn't,
+                                // prefer the non-bot region
+                                return isBot1 ? 1 : -1;
+                            }
+
+                            // If both are bot regions or both are not,
+                            // compare by area as before
                             long area1 = r1.getArea();
                             long area2 = r2.getArea();
                             return Long.compare(area1, area2);
@@ -121,9 +134,11 @@ public class ParallelProcessor {
     }
 
     public static void setupThreadPool(int parallelism) {
-        SharedThreadPools.getSharedAffinityTickPool();
+        SharedThreadPools.getSharedTickPool();
 
         worldPool = GlobalAffinityThreadPool.getAffinityThreadPool();
+        for (int i = 0; i < 2; i++)
+            GlobalAffinityThreadPool.increasePoolSize();
     }
 
     // Statistics
@@ -167,7 +182,10 @@ public class ParallelProcessor {
         synchronized (pendingRegionsToAdd) {
             if (!pendingRegionsToAdd.isEmpty()) {
                 synchronized (threadedChunksRegions) {
-                    threadedChunksRegions.addAll(pendingRegionsToAdd);
+                    for (ThreadedChunksRegion region : pendingRegionsToAdd) {
+                        threadedChunksRegions.add(region);
+                        GlobalAffinityThreadPool.increasePoolSize();
+                    }
                     chunkRegionCache.invalidateAll();
                     pendingRegionsToAdd.clear();
                 }
@@ -175,10 +193,11 @@ public class ParallelProcessor {
         }
         synchronized (pendingRegionsToRemove) {
             if (!pendingRegionsToRemove.isEmpty()) {
-                threadedChunksRegions.removeAll(pendingRegionsToRemove);
                 synchronized (pendingRegionsToRemove) {
                     for (ThreadedChunksRegion region : pendingRegionsToRemove) {
+                        threadedChunksRegions.remove(region);
                         region.shutdownExecutors();
+                        GlobalAffinityThreadPool.decreasePoolSize();
                     }
                     chunkRegionCache.invalidateAll();
                     pendingRegionsToRemove.clear();
@@ -321,7 +340,7 @@ public class ParallelProcessor {
             for (ThreadedChunksRegion region : threadedChunksRegions) {
                 // Region's post-chunk-tick handler
                 if (region.getWorldId().equals(world.getRegistryKey().getValue().toString())) {
-                    SharedThreadPools.getSharedAffinityTickPool().execute(region::postChunkTick);
+                    SharedThreadPools.getSharedTickPool().execute(region::postChunkTick);
                 }
             }
         }
@@ -432,7 +451,7 @@ public class ParallelProcessor {
         synchronized (threadedChunksRegions) {
             for (ThreadedChunksRegion region : threadedChunksRegions) {
                 if (region.getWorldId().equals(world.getRegistryKey().getValue().toString())) {
-                    SharedThreadPools.getSharedAffinityTickPool().execute(region::postEntityTick);
+                    SharedThreadPools.getSharedTickPool().execute(region::postEntityTick);
 
                 }
             }
@@ -538,7 +557,7 @@ public class ParallelProcessor {
         synchronized (threadedChunksRegions) {
             for (ThreadedChunksRegion region : threadedChunksRegions) {
                 if (region.getWorldId().equals(world.getRegistryKey().getValue().toString())) {
-                    SharedThreadPools.getSharedAffinityTickPool().execute(region::postBlockEntityTick);
+                    SharedThreadPools.getSharedTickPool().execute(region::postBlockEntityTick);
                 }
             }
         }

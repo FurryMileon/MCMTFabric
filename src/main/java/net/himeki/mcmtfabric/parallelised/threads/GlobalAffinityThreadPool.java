@@ -11,13 +11,12 @@ public class GlobalAffinityThreadPool {
     public static synchronized ExecutorService getAffinityThreadPool() {
         if (affinityThreadPool == null || affinityThreadPool.isShutdown()) {
             int totalCores = Runtime.getRuntime().availableProcessors();
-            int poolSize = totalCores - 2; // Reserve some cores for OS and other processes
 
             AffinityThreadFactory threadFactory = new AffinityThreadFactory("MCMT-AffinityThread");
 
             affinityThreadPool = new ThreadPoolExecutor(
-                    poolSize,
-                    poolSize,
+                    1,
+                    1,
                     0L, TimeUnit.MILLISECONDS,
                     new LinkedBlockingQueue<>(),
                     threadFactory,
@@ -25,6 +24,20 @@ public class GlobalAffinityThreadPool {
             );
         }
         return affinityThreadPool;
+    }
+
+    public static void increasePoolSize() {
+        if (affinityThreadPool != null) {
+            affinityThreadPool.setMaximumPoolSize(affinityThreadPool.getMaximumPoolSize() + 1);
+            affinityThreadPool.setCorePoolSize(affinityThreadPool.getCorePoolSize() + 1);
+        }
+    }
+
+    public static void decreasePoolSize() {
+        if (affinityThreadPool != null) {
+            affinityThreadPool.setCorePoolSize(affinityThreadPool.getCorePoolSize() - 1);
+            affinityThreadPool.setMaximumPoolSize(affinityThreadPool.getMaximumPoolSize() - 1);
+        }
     }
 
     public static void shutdown() {
