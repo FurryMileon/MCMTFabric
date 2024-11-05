@@ -39,9 +39,9 @@ public class ConfigCommand {
                             cmdCtx.getSource().sendFeedback(() -> message, true);
                             return 1;
                         }).then(literal("te").executes(cmdCtx -> {
-                            config.disableTileEntity = !config.disableTileEntity;
+                            config.disableBlockEntity = !config.disableBlockEntity;
                             MutableText message = Text.literal("MCMT's tile entity threading is now "
-                                    + (config.disableTileEntity ? "disabled" : "enabled"));
+                                    + (config.disableBlockEntity ? "disabled" : "enabled"));
                             cmdCtx.getSource().sendFeedback(() -> message, true);
                             return 1;
                         })).then(literal("entity").executes(cmdCtx -> {
@@ -76,7 +76,7 @@ public class ConfigCommand {
                     if (!config.disabled) {
                         messageString.append(" World:" + (config.disableWorld ? "disabled" : "enabled"));
                         messageString.append(" Entity:" + (config.disableEntity ? "disabled" : "enabled"));
-                        messageString.append(" TE:" + (config.disableTileEntity ? "disabled"
+                        messageString.append(" TE:" + (config.disableBlockEntity ? "disabled"
                                 : "enabled" + (config.chunkLockModded ? "(ChunkLocking Modded)" : "")));
                         messageString.append(" Env:" + (config.disableEnvironment ? "disabled" : "enabled"));
                         messageString.append(" SCP:" + (config.disableChunkProvider ? "disabled" : "enabled"));

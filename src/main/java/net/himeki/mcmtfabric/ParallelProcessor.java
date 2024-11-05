@@ -345,17 +345,15 @@ public class ParallelProcessor {
             }
         }
 
-        if (!config.disabled && !config.disableEnvironment) {
-            // Process delayed chunk tasks
-            List<Runnable> tasks = delayedChunkTasks.remove(world);
-            if (tasks != null) {
-                WorldTickStats stats = worldTickStats.computeIfAbsent(world, w -> new WorldTickStats());
-                for (Runnable task : tasks) {
-                    long startTime = System.nanoTime();
-                    task.run();
-                    long endTime = System.nanoTime();
-                    stats.chunkTickTimesCurrent.add(endTime - startTime);
-                }
+        // Process delayed chunk tasks
+        List<Runnable> tasks = delayedChunkTasks.remove(world);
+        if (tasks != null) {
+            WorldTickStats stats = worldTickStats.computeIfAbsent(world, w -> new WorldTickStats());
+            for (Runnable task : tasks) {
+                long startTime = System.nanoTime();
+                task.run();
+                long endTime = System.nanoTime();
+                stats.chunkTickTimesCurrent.add(endTime - startTime);
             }
         }
     }
@@ -457,23 +455,22 @@ public class ParallelProcessor {
             }
         }
 
-        if (!config.disabled && !config.disableEntity) {
-            // Process delayed entity tasks
-            List<Runnable> tasks = delayedEntityTasks.remove(world);
-            if (tasks != null) {
-                WorldTickStats stats = worldTickStats.computeIfAbsent(world, w -> new WorldTickStats());
-                for (Runnable task : tasks) {
-                    long startTime = System.nanoTime();
-                    task.run();
-                    long endTime = System.nanoTime();
-                    stats.entityTickTimesCurrent.add(endTime - startTime);
-                }
+        // Process delayed entity tasks
+        List<Runnable> tasks = delayedEntityTasks.remove(world);
+        if (tasks != null) {
+            WorldTickStats stats = worldTickStats.computeIfAbsent(world, w -> new WorldTickStats());
+            for (Runnable task : tasks) {
+                long startTime = System.nanoTime();
+                task.run();
+                long endTime = System.nanoTime();
+                stats.entityTickTimesCurrent.add(endTime - startTime);
             }
         }
+
     }
 
     public static void preBlockEntityTick(ServerWorld world) {
-        if (config.disabled || config.disableTileEntity) {
+        if (config.disabled || config.disableBlockEntity) {
             return;
         }
         synchronized (threadedChunksRegions) {
@@ -492,6 +489,11 @@ public class ParallelProcessor {
         }
 
         if (!(wrappedInvoker.wrapped instanceof WorldChunk.DirectBlockEntityTickInvoker<?>)) {
+            tte.tick();
+            return;
+        }
+
+        if (config.disabled || config.disableBlockEntity) {
             tte.tick();
             return;
         }
@@ -562,17 +564,15 @@ public class ParallelProcessor {
             }
         }
 
-        if (!config.disabled && !config.disableTileEntity) {
-            // Process delayed block entity tasks
-            List<Runnable> tasks = delayedBlockEntityTasks.remove(world);
-            if (tasks != null) {
-                WorldTickStats stats = worldTickStats.computeIfAbsent(world, w -> new WorldTickStats());
-                for (Runnable task : tasks) {
-                    long startTime = System.nanoTime();
-                    task.run();
-                    long endTime = System.nanoTime();
-                    stats.blockEntityTickTimesCurrent.add(endTime - startTime);
-                }
+        // Process delayed block entity tasks
+        List<Runnable> tasks = delayedBlockEntityTasks.remove(world);
+        if (tasks != null) {
+            WorldTickStats stats = worldTickStats.computeIfAbsent(world, w -> new WorldTickStats());
+            for (Runnable task : tasks) {
+                long startTime = System.nanoTime();
+                task.run();
+                long endTime = System.nanoTime();
+                stats.blockEntityTickTimesCurrent.add(endTime - startTime);
             }
         }
 
