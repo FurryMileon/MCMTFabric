@@ -43,8 +43,7 @@
     "TypeFilterableListMixin",
     "UtilMixin",
     "WorldChunkMixin",
-    "WorldMixin",
-    "WorldTickSchedulerMixin"
+    "WorldMixin"
   ],
   "client": [
   ],

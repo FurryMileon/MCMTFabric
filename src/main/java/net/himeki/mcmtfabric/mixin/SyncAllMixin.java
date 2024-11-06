@@ -9,9 +9,10 @@ import net.minecraft.world.border.WorldBorder;
 import net.minecraft.world.chunk.light.LevelPropagator;
 import net.minecraft.world.event.listener.SimpleGameEventDispatcher;
 import net.minecraft.world.tick.ChunkTickScheduler;
+import net.minecraft.world.tick.WorldTickScheduler;
 import org.spongepowered.asm.mixin.Mixin;
 
 @Mixin(value = {PathMinHeap.class, ChunkTickScheduler.class, LevelPropagator.class, EntityNavigation.class,
-        SimpleGameEventDispatcher.class, CheckedRandom.class, WardenAngerManager.class, AbstractCriterion.class, WorldBorder.class})
+        SimpleGameEventDispatcher.class, CheckedRandom.class, WardenAngerManager.class, AbstractCriterion.class, WorldBorder.class, WorldTickScheduler.class})
 public class SyncAllMixin {
 }
