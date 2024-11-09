@@ -6,7 +6,6 @@ import net.himeki.mcmtfabric.config.GeneralConfig;
 import net.himeki.mcmtfabric.debug.WorldTickStats;
 import net.himeki.mcmtfabric.parallelised.BotRegionManager;
 import net.himeki.mcmtfabric.parallelised.threads.GlobalAffinityThreadPool;
-import net.himeki.mcmtfabric.parallelised.threads.SharedThreadPools;
 import net.himeki.mcmtfabric.parallelised.threads.ThreadedChunksRegion;
 import net.himeki.mcmtfabric.serdes.pools.PostExecutePool;
 import net.minecraft.block.entity.*;
@@ -134,11 +133,11 @@ public class ParallelProcessor {
     }
 
     public static void setupThreadPool(int parallelism) {
-        SharedThreadPools.getSharedTickPool();
+        GlobalAffinityThreadPool.getAffinitySharedPool();
 
-        worldPool = GlobalAffinityThreadPool.getAffinityThreadPool();
+        worldPool = GlobalAffinityThreadPool.getAffinityWorldAndRegionPool();
         for (int i = 0; i < 2; i++)
-            GlobalAffinityThreadPool.increasePoolSize();
+            GlobalAffinityThreadPool.increaseWorldAndRegionPoolSize();
     }
 
     // Statistics
@@ -184,7 +183,7 @@ public class ParallelProcessor {
                 synchronized (threadedChunksRegions) {
                     for (ThreadedChunksRegion region : pendingRegionsToAdd) {
                         threadedChunksRegions.add(region);
-                        GlobalAffinityThreadPool.increasePoolSize();
+                        GlobalAffinityThreadPool.increaseWorldAndRegionPoolSize();
                     }
                     chunkRegionCache.invalidateAll();
                     pendingRegionsToAdd.clear();
@@ -197,7 +196,7 @@ public class ParallelProcessor {
                     for (ThreadedChunksRegion region : pendingRegionsToRemove) {
                         threadedChunksRegions.remove(region);
                         region.shutdownExecutors();
-                        GlobalAffinityThreadPool.decreasePoolSize();
+                        GlobalAffinityThreadPool.decreaseWorldAndRegionPoolSize();
                     }
                     chunkRegionCache.invalidateAll();
                     pendingRegionsToRemove.clear();
@@ -340,7 +339,7 @@ public class ParallelProcessor {
             for (ThreadedChunksRegion region : threadedChunksRegions) {
                 // Region's post-chunk-tick handler
                 if (region.getWorldId().equals(world.getRegistryKey().getValue().toString())) {
-                    SharedThreadPools.getSharedTickPool().execute(region::postChunkTick);
+                    GlobalAffinityThreadPool.getAffinitySharedPool().execute(region::postChunkTick);
                 }
             }
         }
@@ -449,7 +448,7 @@ public class ParallelProcessor {
         synchronized (threadedChunksRegions) {
             for (ThreadedChunksRegion region : threadedChunksRegions) {
                 if (region.getWorldId().equals(world.getRegistryKey().getValue().toString())) {
-                    SharedThreadPools.getSharedTickPool().execute(region::postEntityTick);
+                    GlobalAffinityThreadPool.getAffinitySharedPool().execute(region::postEntityTick);
 
                 }
             }
@@ -559,7 +558,7 @@ public class ParallelProcessor {
         synchronized (threadedChunksRegions) {
             for (ThreadedChunksRegion region : threadedChunksRegions) {
                 if (region.getWorldId().equals(world.getRegistryKey().getValue().toString())) {
-                    SharedThreadPools.getSharedTickPool().execute(region::postBlockEntityTick);
+                    GlobalAffinityThreadPool.getAffinitySharedPool().execute(region::postBlockEntityTick);
                 }
             }
         }

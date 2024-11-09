@@ -154,7 +154,7 @@ public class ThreadedChunksRegion implements ConfigData {
 
     public Executor getAffinitySerialExecutor() {
         if (serialExecutor == null) {
-            serialExecutor = new SerialExecutor(GlobalAffinityThreadPool.getAffinityThreadPool());
+            serialExecutor = new SerialExecutor(GlobalAffinityThreadPool.getAffinityWorldAndRegionPool());
         }
         return serialExecutor;
     }
@@ -165,19 +165,19 @@ public class ThreadedChunksRegion implements ConfigData {
 
     public Executor getChunkTickExecutor() {
         return multiThreadChunkTick ?
-                SharedThreadPools.getSharedChunkTickPool() :
+                GlobalAffinityThreadPool.getAffinitySharedPool() :
                 getSingleThreadExecutor();
     }
 
     public Executor getEntityTickExecutor() {
         return multiThreadEntityTick ?
-                SharedThreadPools.getSharedEntityTickPool() :
+                GlobalAffinityThreadPool.getAffinitySharedPool() :
                 getSingleThreadExecutor();
     }
 
     public Executor getBlockEntityTickExecutor() {
         return multiThreadBlockEntityTick ?
-                SharedThreadPools.getSharedBlockEntityTickPool() :
+                GlobalAffinityThreadPool.getAffinitySharedPool() :
                 getSingleThreadExecutor();
     }
 
@@ -211,9 +211,7 @@ public class ThreadedChunksRegion implements ConfigData {
                 LOGGER.debug("Region {} releasing core {}", name, assignedCpuCore);
                 CPUCoreManager.releaseCore(assignedCpuCore, "REGION");
                 assignedCpuCore = -1;
-                SharedThreadPools.adjustSharedPoolSize();
             }
-//            singleThreadExecutor.shutdown();
             singleThreadExecutor = null;
         }
     }

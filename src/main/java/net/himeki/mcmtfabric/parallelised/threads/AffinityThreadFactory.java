@@ -38,6 +38,8 @@ public class AffinityThreadFactory implements ThreadFactory {
                         affinityLock.release();
                     }
                     // Core release is managed globally on shutdown
+                    CPUCoreManager.releaseCore(assignedCpuCore, prefix);
+                    assignedCpuCores.remove(Integer.valueOf(assignedCpuCore));
                 }
             }
         };
