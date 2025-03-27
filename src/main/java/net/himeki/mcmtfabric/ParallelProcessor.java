@@ -13,6 +13,7 @@ import net.minecraft.entity.Entity;
 import net.minecraft.entity.FallingBlockEntity;
 import net.minecraft.entity.TntEntity;
 import net.minecraft.entity.passive.AllayEntity;
+import net.minecraft.entity.projectile.ProjectileEntity;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.network.ServerPlayerEntity;
 import net.minecraft.server.world.ServerWorld;
@@ -379,6 +380,11 @@ public class ParallelProcessor {
             return;
         }
 
+        if (shouldTickPortalSynchronously(entityIn)) {
+            tickConsumer.accept(entityIn);
+            return;
+        }
+
         int chunkX = entityIn.getChunkPos().x;
         int chunkZ = entityIn.getChunkPos().z;
 
@@ -442,6 +448,13 @@ public class ParallelProcessor {
         return entity instanceof FallingBlockEntity ||
                 entity instanceof AllayEntity ||
                 entity instanceof TntEntity;
+    }
+
+    private static boolean shouldTickPortalSynchronously(Entity entity) {
+        if (entity.portalManager != null && entity.portalManager.isInPortal()) {
+            return true;
+        }
+        return entity instanceof ProjectileEntity;
     }
 
     public static void postEntityTick(ServerWorld world) {
