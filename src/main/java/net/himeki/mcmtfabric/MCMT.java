@@ -91,7 +91,7 @@ public class MCMT implements ModInitializer {
         LOGGER.info("Initializing MCMTFabric...");
 
         // Register debug blocks and entities based on environment variable
-        if (System.getProperty("MCMT_ENABLE_DEBUG").equals("true")) {
+        if (Objects.requireNonNullElse(System.getProperty("MCMT_ENABLE_DEBUG"), "").equals("true")) {
             registerDebugBlocks();
             registerDebugEntities();
         } else {
