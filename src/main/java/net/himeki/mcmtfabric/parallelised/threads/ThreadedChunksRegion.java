@@ -43,49 +43,69 @@ public class ThreadedChunksRegion implements ConfigData {
     private transient long tickStartNanos;
 
     @ConfigEntry.Gui.Excluded
-    private transient long chunkWorkCurrent;
+    private transient long chunkWorkTotal;
 
     @ConfigEntry.Gui.Excluded
-    private transient long entityWorkCurrent;
+    private transient long entityWorkTotal;
 
     @ConfigEntry.Gui.Excluded
-    private transient long blockWorkCurrent;
+    private transient long blockWorkTotal;
 
     @ConfigEntry.Gui.Excluded
-    private transient int chunkTasksCurrent;
+    private transient int chunkTasksTotal;
 
     @ConfigEntry.Gui.Excluded
-    private transient int entityTasksCurrent;
+    private transient int entityTasksTotal;
 
     @ConfigEntry.Gui.Excluded
-    private transient int blockTasksCurrent;
+    private transient int blockTasksTotal;
 
     @ConfigEntry.Gui.Excluded
-    private transient long chunkWorkLast;
+    private transient long chunkWorkBaseline;
 
     @ConfigEntry.Gui.Excluded
-    private transient long entityWorkLast;
+    private transient long entityWorkBaseline;
 
     @ConfigEntry.Gui.Excluded
-    private transient long blockWorkLast;
+    private transient long blockWorkBaseline;
 
     @ConfigEntry.Gui.Excluded
-    private transient int chunkTasksLast;
+    private transient int chunkTasksBaseline;
 
     @ConfigEntry.Gui.Excluded
-    private transient int entityTasksLast;
+    private transient int entityTasksBaseline;
 
     @ConfigEntry.Gui.Excluded
-    private transient int blockTasksLast;
+    private transient int blockTasksBaseline;
 
     @ConfigEntry.Gui.Excluded
-    private transient long lastTickDurationNanos;
+    private transient volatile long chunkWorkLast;
+
+    @ConfigEntry.Gui.Excluded
+    private transient volatile long entityWorkLast;
+
+    @ConfigEntry.Gui.Excluded
+    private transient volatile long blockWorkLast;
+
+    @ConfigEntry.Gui.Excluded
+    private transient volatile int chunkTasksLast;
+
+    @ConfigEntry.Gui.Excluded
+    private transient volatile int entityTasksLast;
+
+    @ConfigEntry.Gui.Excluded
+    private transient volatile int blockTasksLast;
+
+    @ConfigEntry.Gui.Excluded
+    private transient volatile long lastTickDurationNanos;
 
     private enum TickStage {
         CHUNK,
         ENTITY,
         BLOCK_ENTITY,
-        GENERIC
+        GENERIC,
+        TICK_START,
+        TICK_END
     }
 
     public ThreadedChunksRegion() {
@@ -141,16 +161,16 @@ public class ThreadedChunksRegion implements ConfigData {
     private void recordWork(TickStage stage, long duration) {
         switch (stage) {
             case CHUNK -> {
-                chunkWorkCurrent += duration;
-                chunkTasksCurrent++;
+                chunkWorkTotal += duration;
+                chunkTasksTotal++;
             }
             case ENTITY -> {
-                entityWorkCurrent += duration;
-                entityTasksCurrent++;
+                entityWorkTotal += duration;
+                entityTasksTotal++;
             }
             case BLOCK_ENTITY -> {
-                blockWorkCurrent += duration;
-                blockTasksCurrent++;
+                blockWorkTotal += duration;
+                blockTasksTotal++;
             }
             default -> {
             }
@@ -181,42 +201,35 @@ public class ThreadedChunksRegion implements ConfigData {
     }
 
     public void beginTick() {
-        tickStartNanos = System.nanoTime();
-        chunkWorkCurrent = 0L;
-        entityWorkCurrent = 0L;
-        blockWorkCurrent = 0L;
-        chunkTasksCurrent = 0;
-        entityTasksCurrent = 0;
-        blockTasksCurrent = 0;
-    }
-
-    public void awaitCompletion() {
-        CompletableFuture<Void> tail;
-        synchronized (executorLock) {
-            tail = executorTail;
-        }
-        tail.join();
+        submitSequential(TickStage.TICK_START, this::markTickStart);
     }
 
     public void finishTick() {
-        awaitCompletion();
-        chunkWorkLast = chunkWorkCurrent;
-        entityWorkLast = entityWorkCurrent;
-        blockWorkLast = blockWorkCurrent;
-        chunkTasksLast = chunkTasksCurrent;
-        entityTasksLast = entityTasksCurrent;
-        blockTasksLast = blockTasksCurrent;
+        submitSequential(TickStage.TICK_END, this::markTickEnd);
+    }
+
+    private void markTickStart() {
+        tickStartNanos = System.nanoTime();
+        chunkWorkBaseline = chunkWorkTotal;
+        entityWorkBaseline = entityWorkTotal;
+        blockWorkBaseline = blockWorkTotal;
+        chunkTasksBaseline = chunkTasksTotal;
+        entityTasksBaseline = entityTasksTotal;
+        blockTasksBaseline = blockTasksTotal;
+    }
+
+    private void markTickEnd() {
+        chunkWorkLast = chunkWorkTotal - chunkWorkBaseline;
+        entityWorkLast = entityWorkTotal - entityWorkBaseline;
+        blockWorkLast = blockWorkTotal - blockWorkBaseline;
+        chunkTasksLast = chunkTasksTotal - chunkTasksBaseline;
+        entityTasksLast = entityTasksTotal - entityTasksBaseline;
+        blockTasksLast = blockTasksTotal - blockTasksBaseline;
         if (tickStartNanos != 0L) {
             lastTickDurationNanos = System.nanoTime() - tickStartNanos;
         } else {
             lastTickDurationNanos = 0L;
         }
-        chunkWorkCurrent = 0L;
-        entityWorkCurrent = 0L;
-        blockWorkCurrent = 0L;
-        chunkTasksCurrent = 0;
-        entityTasksCurrent = 0;
-        blockTasksCurrent = 0;
         tickStartNanos = 0L;
     }
 
