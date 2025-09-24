@@ -378,6 +378,28 @@ public class ThreadedChunksRegion implements ConfigData {
         blockEntityStageMeasured.set(false);
     }
 
+    public RegionWorkDurations snapshotWorkDurations() {
+        QueueSummary chunk = summarizeQueue(chunkTickTimesLast);
+        QueueSummary entity = summarizeQueue(entityTickTimesLast);
+        QueueSummary block = summarizeQueue(blockEntityTickTimesLast);
+        return new RegionWorkDurations(
+                chunk.totalNanos(), entity.totalNanos(), block.totalNanos(),
+                chunk.count(), entity.count(), block.count(),
+                lastChunkStageDuration, lastEntityStageDuration, lastBlockEntityStageDuration);
+    }
+
+    private static QueueSummary summarizeQueue(ConcurrentLinkedQueue<Long> queue) {
+        long total = 0L;
+        int count = 0;
+        for (Long value : queue) {
+            if (value != null) {
+                total += value;
+                count++;
+            }
+        }
+        return new QueueSummary(total, count);
+    }
+
     public Phaser getChunkTickPhaser() {
         return chunkTickPhaser;
     }
@@ -388,5 +410,20 @@ public class ThreadedChunksRegion implements ConfigData {
 
     public Phaser getBlockEntityTickPhaser() {
         return blockEntityTickPhaser;
+    }
+
+    private record QueueSummary(long totalNanos, int count) {
+    }
+
+    public record RegionWorkDurations(long chunkWorkNanos, long entityWorkNanos, long blockWorkNanos,
+                                      int chunkTasks, int entityTasks, int blockEntityTasks,
+                                      long chunkStageDuration, long entityStageDuration, long blockEntityStageDuration) {
+        public long totalWorkNanos() {
+            return chunkWorkNanos + entityWorkNanos + blockWorkNanos;
+        }
+
+        public long totalStageNanos() {
+            return chunkStageDuration + entityStageDuration + blockEntityStageDuration;
+        }
     }
 }

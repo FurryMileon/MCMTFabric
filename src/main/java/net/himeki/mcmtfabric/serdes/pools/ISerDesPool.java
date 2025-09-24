@@ -5,7 +5,7 @@ import java.util.Map;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.world.World;
 
-import javax.annotation.Nullable;
+import net.himeki.mcmtfabric.util.annotations.Nullable;
 
 public interface ISerDesPool {
 

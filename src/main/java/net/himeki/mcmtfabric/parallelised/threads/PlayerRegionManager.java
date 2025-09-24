@@ -1,7 +1,5 @@
 package net.himeki.mcmtfabric.parallelised.threads;
 
-import com.github.benmanes.caffeine.cache.Cache;
-import com.github.benmanes.caffeine.cache.Caffeine;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.network.ServerPlayerEntity;
 import net.minecraft.server.world.ServerWorld;
@@ -14,10 +12,12 @@ import java.util.Collections;
 import java.util.Deque;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.function.Function;
 
 /**
  * Maintains the dynamic mapping between players and threaded regions.
@@ -25,7 +25,7 @@ import java.util.UUID;
 public class PlayerRegionManager {
 
     private final Map<String, PlayerRegion> activeRegions = new HashMap<>();
-    private final Map<ServerWorld, Cache<ChunkPos, PlayerRegion>> chunkRegionCaches = new HashMap<>();
+    private final Map<ServerWorld, RegionCache> chunkRegionCaches = new HashMap<>();
     private volatile Map<ServerWorld, List<PlayerRegion>> regionsByWorld = Map.of();
 
     public synchronized void updateRegions(MinecraftServer server) {
@@ -37,7 +37,7 @@ public class PlayerRegionManager {
             seenWorlds.add(world);
             List<PlayerArea> areas = collectPlayerAreas(world);
             if (areas.isEmpty()) {
-                Cache<ChunkPos, PlayerRegion> cache = chunkRegionCaches.get(world);
+                RegionCache cache = chunkRegionCaches.get(world);
                 if (cache != null) {
                     cache.invalidateAll();
                 }
@@ -47,7 +47,7 @@ public class PlayerRegionManager {
             List<PlayerRegion> regions = buildRegionsForWorld(world, areas, nextActive);
             nextRegionsByWorld.put(world, List.copyOf(regions));
             chunkRegionCaches
-                    .computeIfAbsent(world, key -> Caffeine.newBuilder().maximumSize(8192).build())
+                    .computeIfAbsent(world, key -> new RegionCache())
                     .invalidateAll();
         }
 
@@ -154,8 +154,7 @@ public class PlayerRegionManager {
         if (regions == null || regions.isEmpty()) {
             return null;
         }
-        Cache<ChunkPos, PlayerRegion> cache = chunkRegionCaches.computeIfAbsent(world,
-                key -> Caffeine.newBuilder().maximumSize(8192).build());
+        RegionCache cache = chunkRegionCaches.computeIfAbsent(world, key -> new RegionCache());
         ChunkPos pos = new ChunkPos(chunkX, chunkZ);
         return cache.get(pos, key -> lookupRegion(world, regions, chunkX, chunkZ));
     }
@@ -168,5 +167,30 @@ public class PlayerRegionManager {
             }
         }
         return null;
+    }
+
+    private static final class RegionCache {
+        private static final int MAX_SIZE = 8192;
+        private final LinkedHashMap<ChunkPos, PlayerRegion> entries = new LinkedHashMap<>(16, 0.75f, true) {
+            @Override
+            protected boolean removeEldestEntry(Map.Entry<ChunkPos, PlayerRegion> eldest) {
+                return size() > MAX_SIZE;
+            }
+        };
+
+        public synchronized PlayerRegion get(ChunkPos key, Function<ChunkPos, PlayerRegion> loader) {
+            PlayerRegion region = entries.get(key);
+            if (region == null) {
+                region = loader.apply(key);
+                if (region != null) {
+                    entries.put(key, region);
+                }
+            }
+            return region;
+        }
+
+        public synchronized void invalidateAll() {
+            entries.clear();
+        }
     }
 }
