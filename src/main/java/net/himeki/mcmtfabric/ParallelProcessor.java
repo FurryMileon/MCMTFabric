@@ -25,6 +25,7 @@ import java.util.Deque;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
+import java.util.NoSuchElementException;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
@@ -265,7 +266,11 @@ public class ParallelProcessor {
         matchingRegion.executeEntityTask(() -> {
             currentEnts.incrementAndGet();
             try {
-                tickConsumer.accept(entity);
+                try {
+                    tickConsumer.accept(entity);
+                } catch (NoSuchElementException exception) {
+                    LOGGER.debug("Skipping entity tick for {} in region {} due to missing AI state", entity, matchingRegion.getName(), exception);
+                }
             } finally {
                 currentEnts.decrementAndGet();
                 if (finalTaskName != null) {
