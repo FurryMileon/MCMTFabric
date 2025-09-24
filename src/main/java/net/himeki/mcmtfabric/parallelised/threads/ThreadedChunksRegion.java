@@ -34,6 +34,9 @@ public class ThreadedChunksRegion implements ConfigData {
     private transient CompletableFuture<Void> executorTail = CompletableFuture.completedFuture(null);
 
     @ConfigEntry.Gui.Excluded
+    private transient CompletableFuture<Void> shutdownFuture;
+
+    @ConfigEntry.Gui.Excluded
     private transient boolean shutdown;
 
     @ConfigEntry.Gui.Excluded
@@ -233,15 +236,22 @@ public class ThreadedChunksRegion implements ConfigData {
         tickStartNanos = 0L;
     }
 
-    public void shutdownExecutors() {
-        CompletableFuture<Void> tail;
+    public CompletableFuture<Void> shutdownExecutors() {
         synchronized (executorLock) {
+            if (shutdownFuture != null) {
+                return shutdownFuture;
+            }
             shutdown = true;
-            tail = executorTail;
+            shutdownFuture = executorTail;
             singleThreadExecutor = null;
             executorTail = CompletableFuture.completedFuture(null);
+            return shutdownFuture;
         }
-        tail.join();
+    }
+
+    public void awaitTermination() {
+        CompletableFuture<Void> future = shutdownExecutors();
+        future.join();
     }
 
     public String getName() {

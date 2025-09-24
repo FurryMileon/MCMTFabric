@@ -17,6 +17,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 import java.util.function.Function;
 
 /**
@@ -26,9 +27,11 @@ public class PlayerRegionManager {
 
     private final Map<String, PlayerRegion> activeRegions = new HashMap<>();
     private final Map<ServerWorld, RegionCache> chunkRegionCaches = new HashMap<>();
+    private final List<CompletableFuture<Void>> pendingShutdowns = new ArrayList<>();
     private volatile Map<ServerWorld, List<PlayerRegion>> regionsByWorld = Map.of();
 
     public synchronized void updateRegions(MinecraftServer server) {
+        pendingShutdowns.removeIf(CompletableFuture::isDone);
         Map<String, PlayerRegion> nextActive = new HashMap<>();
         Map<ServerWorld, List<PlayerRegion>> nextRegionsByWorld = new HashMap<>();
         Set<ServerWorld> seenWorlds = new HashSet<>();
@@ -54,7 +57,7 @@ public class PlayerRegionManager {
         // Shutdown regions that are no longer active
         for (Map.Entry<String, PlayerRegion> entry : activeRegions.entrySet()) {
             if (!nextActive.containsKey(entry.getKey())) {
-                entry.getValue().shutdownExecutors();
+                pendingShutdowns.add(entry.getValue().shutdownExecutors());
             }
         }
 
@@ -160,12 +163,18 @@ public class PlayerRegionManager {
     }
 
     public synchronized void shutdownAll() {
+        List<CompletableFuture<Void>> toAwait = new ArrayList<>(activeRegions.size() + pendingShutdowns.size());
         for (PlayerRegion region : activeRegions.values()) {
-            region.shutdownExecutors();
+            toAwait.add(region.shutdownExecutors());
         }
+        toAwait.addAll(pendingShutdowns);
+        pendingShutdowns.clear();
         activeRegions.clear();
         chunkRegionCaches.clear();
         regionsByWorld = Map.of();
+        for (CompletableFuture<Void> future : toAwait) {
+            future.join();
+        }
     }
 
     private static PlayerRegion lookupRegion(ServerWorld world, List<PlayerRegion> regions, int chunkX, int chunkZ) {
