@@ -35,6 +35,8 @@ public class PlayerRegionManager {
         Map<String, PlayerRegion> nextActive = new HashMap<>();
         Map<ServerWorld, List<PlayerRegion>> nextRegionsByWorld = new HashMap<>();
         Set<ServerWorld> seenWorlds = new HashSet<>();
+        Map<String, Map<UUID, PlayerRegion>> previousByWorld = buildPreviousPlayerIndex();
+        Set<PlayerRegion> survivors = new HashSet<>();
 
         for (ServerWorld world : server.getWorlds()) {
             seenWorlds.add(world);
@@ -47,7 +49,12 @@ public class PlayerRegionManager {
                 continue;
             }
 
-            List<PlayerRegion> regions = buildRegionsForWorld(world, areas, nextActive);
+            String worldId = world.getRegistryKey().getValue().toString();
+            Map<UUID, PlayerRegion> previousByPlayer = previousByWorld.get(worldId);
+            if (previousByPlayer == null) {
+                previousByPlayer = new HashMap<>();
+            }
+            List<PlayerRegion> regions = buildRegionsForWorld(world, areas, nextActive, previousByPlayer, survivors);
             nextRegionsByWorld.put(world, List.copyOf(regions));
             chunkRegionCaches
                     .computeIfAbsent(world, key -> new RegionCache())
@@ -55,9 +62,9 @@ public class PlayerRegionManager {
         }
 
         // Shutdown regions that are no longer active
-        for (Map.Entry<String, PlayerRegion> entry : activeRegions.entrySet()) {
-            if (!nextActive.containsKey(entry.getKey())) {
-                pendingShutdowns.add(entry.getValue().shutdownExecutors());
+        for (PlayerRegion region : activeRegions.values()) {
+            if (!survivors.contains(region)) {
+                pendingShutdowns.add(region.shutdownExecutors());
             }
         }
 
@@ -70,7 +77,22 @@ public class PlayerRegionManager {
         regionsByWorld = Map.copyOf(nextRegionsByWorld);
     }
 
-    private List<PlayerRegion> buildRegionsForWorld(ServerWorld world, List<PlayerArea> areas, Map<String, PlayerRegion> nextActive) {
+    private Map<String, Map<UUID, PlayerRegion>> buildPreviousPlayerIndex() {
+        Map<String, Map<UUID, PlayerRegion>> index = new HashMap<>();
+        for (PlayerRegion region : activeRegions.values()) {
+            String worldId = region.getWorldId();
+            Map<UUID, PlayerRegion> mapping = index.computeIfAbsent(worldId, key -> new HashMap<>());
+            for (UUID playerId : region.getPlayerIds()) {
+                mapping.put(playerId, region);
+            }
+        }
+        return index;
+    }
+
+    private List<PlayerRegion> buildRegionsForWorld(ServerWorld world, List<PlayerArea> areas,
+                                                   Map<String, PlayerRegion> nextActive,
+                                                   Map<UUID, PlayerRegion> previousByPlayer,
+                                                   Set<PlayerRegion> survivors) {
         int size = areas.size();
         boolean[] visited = new boolean[size];
         List<PlayerRegion> regions = new ArrayList<>();
@@ -97,7 +119,7 @@ public class PlayerRegionManager {
             }
 
             String key = buildRegionKey(world, group);
-            PlayerRegion region = activeRegions.get(key);
+            PlayerRegion region = reuseRegion(world, group, previousByPlayer);
             if (region == null) {
                 region = new PlayerRegion(world, group);
             } else {
@@ -105,9 +127,30 @@ public class PlayerRegionManager {
             }
             regions.add(region);
             nextActive.put(key, region);
+            survivors.add(region);
         }
 
         return regions;
+    }
+
+    private static PlayerRegion reuseRegion(ServerWorld world, List<PlayerArea> group,
+                                            Map<UUID, PlayerRegion> previousByPlayer) {
+        PlayerRegion candidate = null;
+        for (PlayerArea area : group) {
+            PlayerRegion region = previousByPlayer.remove(area.player().getUuid());
+            if (region != null && region.getWorldId().equals(world.getRegistryKey().getValue().toString())) {
+                candidate = region;
+                break;
+            }
+        }
+        if (candidate == null) {
+            return null;
+        }
+        // Ensure no other player in the group reuses the same region later.
+        for (PlayerArea area : group) {
+            previousByPlayer.remove(area.player().getUuid());
+        }
+        return candidate;
     }
 
     private static List<PlayerArea> collectPlayerAreas(ServerWorld world) {
