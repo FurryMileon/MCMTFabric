@@ -141,10 +141,10 @@ public class ThreadedChunksRegion implements ConfigData {
 
     private CompletableFuture<Void> enqueueSequential(TickStage stage, Runnable command) {
         CompletableFuture<Void> next;
-        boolean runInline = false;
+        CompletableFuture<Void> shutdownWait = null;
         synchronized (executorLock) {
             if (shutdown) {
-                runInline = true;
+                shutdownWait = shutdownFuture;
                 next = null;
             } else {
                 next = executorTail.handle((ignored, error) -> null)
@@ -155,8 +155,9 @@ public class ThreadedChunksRegion implements ConfigData {
                 });
             }
         }
-        if (runInline) {
+        if (shutdownWait != null) {
             try {
+                shutdownWait.join();
                 runStageTask(stage, command);
                 return CompletableFuture.completedFuture(null);
             } catch (RuntimeException | Error throwable) {
@@ -201,9 +202,11 @@ public class ThreadedChunksRegion implements ConfigData {
     private <T> CompletableFuture<T> submitSequentialCallable(TickStage stage, Callable<T> callable) {
         CompletableFuture<T> result = new CompletableFuture<>();
         boolean runInline;
+        CompletableFuture<Void> shutdownWait = null;
         synchronized (executorLock) {
             if (shutdown) {
                 runInline = true;
+                shutdownWait = shutdownFuture;
             } else {
                 CompletableFuture<Void> next = executorTail.handle((ignored, error) -> null)
                         .thenComposeAsync(ignored -> {
@@ -224,6 +227,9 @@ public class ThreadedChunksRegion implements ConfigData {
             }
         }
         if (runInline) {
+            if (shutdownWait != null) {
+                shutdownWait.join();
+            }
             try {
                 result.complete(executeStageCallable(stage, callable));
             } catch (Throwable throwable) {
