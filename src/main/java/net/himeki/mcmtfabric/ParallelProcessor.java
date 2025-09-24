@@ -10,6 +10,8 @@ import net.minecraft.block.entity.BlockEntity;
 import net.minecraft.entity.Entity;
 import net.minecraft.entity.projectile.ProjectileEntity;
 import net.minecraft.server.MinecraftServer;
+import net.minecraft.server.world.ChunkHolder;
+import net.minecraft.server.world.ServerChunkManager;
 import net.minecraft.server.world.ServerWorld;
 import net.minecraft.world.World;
 import net.minecraft.world.chunk.BlockEntityTickInvoker;
@@ -190,6 +192,12 @@ public class ParallelProcessor {
             return;
         }
 
+        ChunkHolder holder = ((ServerChunkManager) world.getChunkManager()).getChunkHolder(chunk.getPos().toLong());
+        if (holder != null) {
+            holder.incrementRefCount();
+        }
+
+        ChunkHolder finalHolder = holder;
         String taskName = null;
         if (config.opsTracing) {
             taskName = "ChunkTick: " + chunk + "@" + chunk.hashCode();
@@ -202,6 +210,9 @@ public class ParallelProcessor {
                 world.tickChunk(chunk, randomTickSpeed);
             } finally {
                 currentEnvs.decrementAndGet();
+                if (finalHolder != null) {
+                    finalHolder.decrementRefCount();
+                }
                 if (finalTaskName != null) {
                     matchingRegion.currentTasks.remove(finalTaskName);
                 }
