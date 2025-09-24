@@ -1,11 +1,9 @@
 package net.himeki.mcmtfabric;
 
-import com.github.benmanes.caffeine.cache.Cache;
-import com.github.benmanes.caffeine.cache.Caffeine;
 import net.himeki.mcmtfabric.config.GeneralConfig;
 import net.himeki.mcmtfabric.debug.WorldTickStats;
-import net.himeki.mcmtfabric.parallelised.BotRegionManager;
-import net.himeki.mcmtfabric.parallelised.threads.GlobalAffinityThreadPool;
+import net.himeki.mcmtfabric.parallelised.threads.PlayerRegion;
+import net.himeki.mcmtfabric.parallelised.threads.PlayerRegionManager;
 import net.himeki.mcmtfabric.parallelised.threads.ThreadedChunksRegion;
 import net.himeki.mcmtfabric.serdes.pools.PostExecutePool;
 import net.minecraft.block.entity.*;
@@ -25,7 +23,11 @@ import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
 import java.util.*;
-import java.util.concurrent.*;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.Executor;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Phaser;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.BooleanSupplier;
@@ -38,6 +40,7 @@ public class ParallelProcessor {
     static Phaser worldPhaser;
 
     static ExecutorService worldPool;
+    static ExecutorService asyncExecutor;
     static MinecraftServer mcs;
     static AtomicBoolean isTicking = new AtomicBoolean();
 
@@ -47,98 +50,16 @@ public class ParallelProcessor {
 
     static Map<String, Set<Thread>> mcThreadTracker = new ConcurrentHashMap<String, Set<Thread>>();
 
-    // List of ThreadedChunksRegion
-    public static final List<ThreadedChunksRegion> threadedChunksRegions = new ArrayList<>();
-
-    private static final Set<ThreadedChunksRegion> pendingRegionsToAdd = ConcurrentHashMap.newKeySet();
-
-    private static final Set<ThreadedChunksRegion> pendingRegionsToRemove = ConcurrentHashMap.newKeySet();
-
+    private static final PlayerRegionManager PLAYER_REGION_MANAGER = new PlayerRegionManager();
 
     public static final ConcurrentHashMap<ServerWorld, WorldTickStats> worldTickStats = new ConcurrentHashMap<>();
-
-    private static final Cache<ChunkPos, ThreadedChunksRegion> chunkRegionCache = Caffeine.newBuilder()
-            .initialCapacity(10000)
-            .maximumSize(10000)
-            .build();
-
-    public static void resetThreadedChunksRegions() {
-        synchronized (threadedChunksRegions) {
-            for (ThreadedChunksRegion region : threadedChunksRegions) {
-                region.shutdownExecutors();
-            }
-            threadedChunksRegions.clear();
-            chunkRegionCache.invalidateAll(); // Invalidate cache when regions are reset
-        }
-    }
-
-    public static void addThreadedChunksRegion(ThreadedChunksRegion region) {
-        synchronized (pendingRegionsToAdd) {
-            pendingRegionsToAdd.add(region);
-            region.getSingleThreadExecutor(); // Force load executor once to avoid blocking when there is no chunk tick
-        }
-    }
-
-
-    public static void removeThreadedChunksRegion(ThreadedChunksRegion region) {
-        synchronized (threadedChunksRegions) {
-            pendingRegionsToRemove.add(region);
-        }
-    }
-
-    public static void removeThreadedChunksRegionByName(String name) {
-        synchronized (threadedChunksRegions) {
-            ThreadedChunksRegion region = null;
-            for (ThreadedChunksRegion r : threadedChunksRegions) {
-                if (r.getName().equals(name)) {
-                    region = r;
-                    break;
-                }
-            }
-            if (region != null) {
-                removeThreadedChunksRegion(region);
-            }
-        }
-    }
-
-    private static ThreadedChunksRegion findMatchingRegion(int chunkX, int chunkZ, World world) {
-        ChunkPos pos = new ChunkPos(chunkX, chunkZ);
-        return chunkRegionCache.get(pos, key -> {
-            synchronized (threadedChunksRegions) {
-                String worldId = world.getRegistryKey().getValue().toString();
-
-                // Single stream operation to find the smallest matching region
-                // with preference for non-bot regions
-                return threadedChunksRegions.stream()
-                        .filter(region -> region.contains(worldId, chunkX, chunkZ))
-                        .min((r1, r2) -> {
-                            // First, compare based on bot region prefix
-                            boolean isBot1 = r1.getName().startsWith("bot_region_");
-                            boolean isBot2 = r2.getName().startsWith("bot_region_");
-
-                            if (isBot1 != isBot2) {
-                                // If one is a bot region and the other isn't,
-                                // prefer the non-bot region
-                                return isBot1 ? 1 : -1;
-                            }
-
-                            // If both are bot regions or both are not,
-                            // compare by area as before
-                            long area1 = r1.getArea();
-                            long area2 = r2.getArea();
-                            return Long.compare(area1, area2);
-                        })
-                        .orElse(null);
-            }
-        });
+    private static ThreadedChunksRegion findMatchingRegion(int chunkX, int chunkZ, ServerWorld world) {
+        return PLAYER_REGION_MANAGER.findRegion(world, chunkX, chunkZ);
     }
 
     public static void setupThreadPool(int parallelism) {
-        GlobalAffinityThreadPool.getAffinitySharedPool();
-
-        worldPool = GlobalAffinityThreadPool.getAffinityWorldAndRegionPool();
-        for (int i = 0; i < 2; i++)
-            GlobalAffinityThreadPool.increaseWorldAndRegionPoolSize();
+        worldPool = Executors.newThreadPerTaskExecutor(Thread.ofVirtual().name("MCMT-World-", 0).factory());
+        asyncExecutor = Executors.newThreadPerTaskExecutor(Thread.ofVirtual().name("MCMT-Async-", 0).factory());
     }
 
     // Statistics
@@ -167,6 +88,7 @@ public class ParallelProcessor {
 
     public static void preTick(int size, MinecraftServer server) {
         config = MCMT.config;
+        PLAYER_REGION_MANAGER.updateRegions(server);
         if (!config.disabled && !config.disableWorld) {
             if (worldPhaser != null) {
                 LOGGER.warn("Multiple servers?");
@@ -176,32 +98,6 @@ public class ParallelProcessor {
                 isTicking.set(true);
                 worldPhaser = new Phaser(size + 1);
                 mcs = server;
-            }
-        }
-        // Process pending regions
-        synchronized (pendingRegionsToAdd) {
-            if (!pendingRegionsToAdd.isEmpty()) {
-                synchronized (threadedChunksRegions) {
-                    for (ThreadedChunksRegion region : pendingRegionsToAdd) {
-                        threadedChunksRegions.add(region);
-                        GlobalAffinityThreadPool.increaseWorldAndRegionPoolSize();
-                    }
-                    chunkRegionCache.invalidateAll();
-                    pendingRegionsToAdd.clear();
-                }
-            }
-        }
-        synchronized (pendingRegionsToRemove) {
-            if (!pendingRegionsToRemove.isEmpty()) {
-                synchronized (pendingRegionsToRemove) {
-                    for (ThreadedChunksRegion region : pendingRegionsToRemove) {
-                        threadedChunksRegions.remove(region);
-                        region.shutdownExecutors();
-                        GlobalAffinityThreadPool.decreaseWorldAndRegionPoolSize();
-                    }
-                    chunkRegionCache.invalidateAll();
-                    pendingRegionsToRemove.clear();
-                }
             }
         }
     }
@@ -261,10 +157,8 @@ public class ParallelProcessor {
             }
         }
 
-        synchronized (threadedChunksRegions) {
-            for (ThreadedChunksRegion region : threadedChunksRegions) {
-                region.swapExecutionTimeBuffers();
-            }
+        for (ThreadedChunksRegion region : PLAYER_REGION_MANAGER.getPlayerRegions()) {
+            region.swapExecutionTimeBuffers();
         }
 
         synchronized (worldTickStats) {
@@ -279,13 +173,8 @@ public class ParallelProcessor {
         if (config.disabled || config.disableEnvironment) {
             return;
         }
-        synchronized (threadedChunksRegions) {
-            for (ThreadedChunksRegion region : threadedChunksRegions) {
-                if (region.getWorldId().equals(world.getRegistryKey().getValue().toString())) {
-                    // Register the main thread in the region's chunkTickPhaser
-//                    region.getChunkTickPhaser().register();
-                }
-            }
+        for (ThreadedChunksRegion region : PLAYER_REGION_MANAGER.getRegions(world)) {
+            // Placeholder for potential phaser registration if needed in future
         }
     }
 
@@ -336,13 +225,8 @@ public class ParallelProcessor {
     }
 
     public static void postChunkTick(ServerWorld world) {
-        synchronized (threadedChunksRegions) {
-            for (ThreadedChunksRegion region : threadedChunksRegions) {
-                // Region's post-chunk-tick handler
-                if (region.getWorldId().equals(world.getRegistryKey().getValue().toString())) {
-                    GlobalAffinityThreadPool.getAffinitySharedPool().execute(region::postChunkTick);
-                }
-            }
+        for (ThreadedChunksRegion region : PLAYER_REGION_MANAGER.getRegions(world)) {
+            asyncExecutor.execute(region::postChunkTick);
         }
 
         // Process delayed chunk tasks
@@ -363,13 +247,8 @@ public class ParallelProcessor {
         if (config.disabled || config.disableEntity) {
             return;
         }
-        synchronized (threadedChunksRegions) {
-            for (ThreadedChunksRegion region : threadedChunksRegions) {
-                if (region.getWorldId().equals(world.getRegistryKey().getValue().toString())) {
-                    // Register the main thread in the region's entityTickPhaser
-//                    region.getEntityTickPhaser().register();
-                }
-            }
+        for (ThreadedChunksRegion region : PLAYER_REGION_MANAGER.getRegions(world)) {
+            // Placeholder for potential phaser registration if needed in future
         }
     }
 
@@ -393,9 +272,6 @@ public class ParallelProcessor {
             // No matching region, delay processing
             delayedEntityTasks.computeIfAbsent(serverworld, w -> new ArrayList<>())
                     .add(() -> {
-                        if (entityIn instanceof ServerPlayerEntity player) {
-                            BotRegionManager.checkAndManageBot(player);
-                        }
                         tickConsumer.accept(entityIn);
                     });
             return;
@@ -423,10 +299,6 @@ public class ParallelProcessor {
                 matchingRegion.recordEntityStageStart();
 
                 long startTime = System.nanoTime();
-
-                if (entityIn instanceof ServerPlayerEntity player) {
-                    BotRegionManager.checkAndManageBot(player);
-                }
 
                 tickConsumer.accept(entityIn);
 
@@ -458,13 +330,8 @@ public class ParallelProcessor {
     }
 
     public static void postEntityTick(ServerWorld world) {
-        synchronized (threadedChunksRegions) {
-            for (ThreadedChunksRegion region : threadedChunksRegions) {
-                if (region.getWorldId().equals(world.getRegistryKey().getValue().toString())) {
-                    GlobalAffinityThreadPool.getAffinitySharedPool().execute(region::postEntityTick);
-
-                }
-            }
+        for (ThreadedChunksRegion region : PLAYER_REGION_MANAGER.getRegions(world)) {
+            asyncExecutor.execute(region::postEntityTick);
         }
 
         // Process delayed entity tasks
@@ -485,12 +352,8 @@ public class ParallelProcessor {
         if (config.disabled || config.disableBlockEntity) {
             return;
         }
-        synchronized (threadedChunksRegions) {
-            for (ThreadedChunksRegion region : threadedChunksRegions) {
-                if (region.getWorldId().equals(world.getRegistryKey().getValue().toString())) {
-//                    region.getBlockEntityTickPhaser().register();
-                }
-            }
+        for (ThreadedChunksRegion region : PLAYER_REGION_MANAGER.getRegions(world)) {
+            // Placeholder for potential phaser registration if needed in future
         }
     }
 
@@ -514,10 +377,11 @@ public class ParallelProcessor {
         int chunkX = blockEntity.getPos().getX() >> 4;
         int chunkZ = blockEntity.getPos().getZ() >> 4;
 
-        ThreadedChunksRegion matchingRegion = findMatchingRegion(chunkX, chunkZ, world);
+        ServerWorld serverWorld = (ServerWorld) world;
+        ThreadedChunksRegion matchingRegion = findMatchingRegion(chunkX, chunkZ, serverWorld);
         if (matchingRegion == null) {
             // No matching region, delay processing
-            delayedBlockEntityTasks.computeIfAbsent((ServerWorld) world, w -> new ArrayList<>())
+            delayedBlockEntityTasks.computeIfAbsent(serverWorld, w -> new ArrayList<>())
                     .add(tte::tick);
             return;
         }
@@ -568,12 +432,8 @@ public class ParallelProcessor {
     }
 
     public static void postBlockEntityTick(ServerWorld world) {
-        synchronized (threadedChunksRegions) {
-            for (ThreadedChunksRegion region : threadedChunksRegions) {
-                if (region.getWorldId().equals(world.getRegistryKey().getValue().toString())) {
-                    GlobalAffinityThreadPool.getAffinitySharedPool().execute(region::postBlockEntityTick);
-                }
-            }
+        for (ThreadedChunksRegion region : PLAYER_REGION_MANAGER.getRegions(world)) {
+            asyncExecutor.execute(region::postBlockEntityTick);
         }
 
         // Process delayed block entity tasks
@@ -588,19 +448,23 @@ public class ParallelProcessor {
             }
         }
 
-        synchronized (threadedChunksRegions) {
-            for (ThreadedChunksRegion region : threadedChunksRegions) {
-                if (region.getWorldId().equals(world.getRegistryKey().getValue().toString())) {
-                    region.getBlockEntityTickPhaser().awaitAdvance(0);
-                    region.initializePhaser();
-                }
-            }
+        for (ThreadedChunksRegion region : PLAYER_REGION_MANAGER.getRegions(world)) {
+            region.getBlockEntityTickPhaser().awaitAdvance(0);
+            region.initializePhaser();
         }
 
     }
 
     public static boolean shouldThreadChunks() {
         return !MCMT.config.disableMultiChunk;
+    }
+
+    public static Collection<PlayerRegion> getPlayerRegions() {
+        return PLAYER_REGION_MANAGER.getPlayerRegions();
+    }
+
+    public static List<PlayerRegion> getPlayerRegions(ServerWorld world) {
+        return PLAYER_REGION_MANAGER.getRegions(world);
     }
 
 }

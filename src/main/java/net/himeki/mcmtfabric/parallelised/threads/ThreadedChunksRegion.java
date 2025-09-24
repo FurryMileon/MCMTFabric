@@ -1,16 +1,17 @@
 package net.himeki.mcmtfabric.parallelised.threads;
 
 import java.util.Set;
-import java.util.concurrent.*;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.Executor;
+import java.util.concurrent.Phaser;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import me.shedaniel.autoconfig.ConfigData;
 import me.shedaniel.autoconfig.annotation.ConfigEntry;
-import net.himeki.mcmtfabric.MCMT;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
-
-import static net.himeki.mcmtfabric.parallelised.threads.MCMTThreads.*;
 
 public class ThreadedChunksRegion implements ConfigData {
     private String name;
@@ -24,17 +25,13 @@ public class ThreadedChunksRegion implements ConfigData {
     private transient Executor singleThreadExecutor;
 
     @ConfigEntry.Gui.Excluded
-    private transient Executor serialExecutor;
-
-    public void setAssignedCpuCore(int assignedCpuCore) {
-        this.assignedCpuCore = assignedCpuCore;
-    }
-
-    @ConfigEntry.Gui.Excluded
-    private transient int assignedCpuCore = -1;
-
-    @ConfigEntry.Gui.Excluded
     private transient String source;
+
+    @ConfigEntry.Gui.Excluded
+    private transient final Object executorLock = new Object();
+
+    @ConfigEntry.Gui.Excluded
+    private transient CompletableFuture<Void> executorTail = CompletableFuture.completedFuture(null);
 
     // Double buffers for execution times
     @ConfigEntry.Gui.Excluded
@@ -132,31 +129,25 @@ public class ThreadedChunksRegion implements ConfigData {
 
     public Executor getSingleThreadExecutor() {
         if (singleThreadExecutor == null) {
-            String poolType = System.getProperty("MCMT_SINGLE_POOL_TYPE", "platform").toLowerCase();
-            switch (poolType) {
-                case "virtual":
-                    singleThreadExecutor = Executors.newSingleThreadExecutor(createNamedVirtualThreadFactory("Region-" + name + "-VirtualThread-"));
-                    break;
-                case "platform":
-                    singleThreadExecutor = Executors.newSingleThreadExecutor(createNamedPlatformThreadFactory("Region-" + name + "-PlatformThread-"));
-                    break;
-                case "affinity":
-//                    singleThreadExecutor = Executors.newSingleThreadExecutor(createNamedPlatformAffinityThreadFactoryForRegion(this));
-                    singleThreadExecutor = getAffinitySerialExecutor();
-                    break;
-                default:
-                    MCMT.LOGGER.warn("Invalid MCMT_SINGLE_POOL_TYPE: {}. Using default 'platform'.", poolType);
-                    singleThreadExecutor = Executors.newSingleThreadExecutor(createNamedPlatformThreadFactory("Region-" + name + "-PlatformThread-"));
-            }
+            singleThreadExecutor = this::submitSequential;
         }
         return singleThreadExecutor;
     }
 
-    public Executor getAffinitySerialExecutor() {
-        if (serialExecutor == null) {
-            serialExecutor = new SerialExecutor(GlobalAffinityThreadPool.getAffinityWorldAndRegionPool());
+    private void submitSequential(Runnable command) {
+        synchronized (executorLock) {
+            executorTail = executorTail.handle((ignored, error) -> null)
+                    .thenRunAsync(() -> {
+                        try {
+                            command.run();
+                        } catch (Throwable throwable) {
+                            LOGGER.error("Exception while running task for region {}", name, throwable);
+                            throw throwable;
+                        }
+                    }, runnable -> Thread.ofVirtual()
+                            .name("Region-" + getName(), 0)
+                            .start(runnable));
         }
-        return serialExecutor;
     }
 
     public boolean contains(String worldId, int x, int z) {
@@ -164,21 +155,15 @@ public class ThreadedChunksRegion implements ConfigData {
     }
 
     public Executor getChunkTickExecutor() {
-        return multiThreadChunkTick ?
-                GlobalAffinityThreadPool.getAffinitySharedPool() :
-                getSingleThreadExecutor();
+        return getSingleThreadExecutor();
     }
 
     public Executor getEntityTickExecutor() {
-        return multiThreadEntityTick ?
-                GlobalAffinityThreadPool.getAffinitySharedPool() :
-                getSingleThreadExecutor();
+        return getSingleThreadExecutor();
     }
 
     public Executor getBlockEntityTickExecutor() {
-        return multiThreadBlockEntityTick ?
-                GlobalAffinityThreadPool.getAffinitySharedPool() :
-                getSingleThreadExecutor();
+        return getSingleThreadExecutor();
     }
 
     public boolean isMultiThreadChunkTick() {
@@ -207,12 +192,10 @@ public class ThreadedChunksRegion implements ConfigData {
 
     public void shutdownExecutors() {
         if (singleThreadExecutor != null) {
-            if (assignedCpuCore != -1) {
-                LOGGER.debug("Region {} releasing core {}", name, assignedCpuCore);
-                CPUCoreManager.releaseCore(assignedCpuCore, "REGION");
-                assignedCpuCore = -1;
-            }
             singleThreadExecutor = null;
+        }
+        synchronized (executorLock) {
+            executorTail = CompletableFuture.completedFuture(null);
         }
     }
 
@@ -247,6 +230,17 @@ public class ThreadedChunksRegion implements ConfigData {
 
     public void setSource(String source) {
         this.source = source;
+    }
+
+    public void setName(String name) {
+        this.name = name;
+    }
+
+    public void updateBounds(int x1, int z1, int x2, int z2) {
+        this.x1 = Math.min(x1, x2);
+        this.z1 = Math.min(z1, z2);
+        this.x2 = Math.max(x1, x2);
+        this.z2 = Math.max(z1, z2);
     }
 
     public void postChunkTick() {
