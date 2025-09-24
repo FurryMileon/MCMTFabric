@@ -6,7 +6,9 @@ import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
 import java.util.Set;
+import java.util.concurrent.Callable;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executor;
 
@@ -102,6 +104,8 @@ public class ThreadedChunksRegion implements ConfigData {
     @ConfigEntry.Gui.Excluded
     private transient volatile long lastTickDurationNanos;
 
+    private static final ThreadLocal<ThreadedChunksRegion> CURRENT_REGION = new ThreadLocal<>();
+
     private enum TickStage {
         CHUNK,
         ENTITY,
@@ -152,13 +156,69 @@ public class ThreadedChunksRegion implements ConfigData {
     }
 
     private void runStageTask(TickStage stage, Runnable command) {
-        long start = System.nanoTime();
-        try {
+        executeStageCallable(stage, () -> {
             command.run();
+            return null;
+        });
+    }
+
+    private <T> T executeStageCallable(TickStage stage, Callable<T> callable) {
+        long start = System.nanoTime();
+        ThreadedChunksRegion previous = CURRENT_REGION.get();
+        CURRENT_REGION.set(this);
+        try {
+            return callable.call();
+        } catch (RuntimeException | Error e) {
+            throw e;
+        } catch (Exception e) {
+            throw new RuntimeException(e);
         } finally {
+            CURRENT_REGION.set(previous);
             long duration = System.nanoTime() - start;
             recordWork(stage, duration);
         }
+    }
+
+    private <T> CompletableFuture<T> submitSequentialCallable(TickStage stage, Callable<T> callable) {
+        CompletableFuture<T> result = new CompletableFuture<>();
+        boolean runInline;
+        synchronized (executorLock) {
+            if (shutdown) {
+                runInline = true;
+            } else {
+                CompletableFuture<Void> next = executorTail.handle((ignored, error) -> null)
+                        .thenComposeAsync(ignored -> {
+                            try {
+                                T value = executeStageCallable(stage, callable);
+                                result.complete(value);
+                            } catch (Throwable throwable) {
+                                result.completeExceptionally(throwable);
+                                throw wrapCompletion(throwable);
+                            }
+                            return CompletableFuture.completedFuture(null);
+                        }, virtualThreadExecutor());
+                executorTail = next.exceptionally(error -> {
+                    LOGGER.error("Exception while running task for region {}", name, error);
+                    return null;
+                });
+                runInline = false;
+            }
+        }
+        if (runInline) {
+            try {
+                result.complete(executeStageCallable(stage, callable));
+            } catch (Throwable throwable) {
+                result.completeExceptionally(throwable);
+            }
+        }
+        return result;
+    }
+
+    private static CompletionException wrapCompletion(Throwable throwable) {
+        if (throwable instanceof CompletionException completion) {
+            return completion;
+        }
+        return new CompletionException(throwable);
     }
 
     private void recordWork(TickStage stage, long duration) {
@@ -195,8 +255,42 @@ public class ThreadedChunksRegion implements ConfigData {
         submitSequential(TickStage.ENTITY, task);
     }
 
+    public <T> T callEntityStage(Callable<T> callable) {
+        return callStageTask(TickStage.ENTITY, callable);
+    }
+
     public void executeBlockEntityTask(Runnable task) {
         submitSequential(TickStage.BLOCK_ENTITY, task);
+    }
+
+    public <T> T callBlockEntityStage(Callable<T> callable) {
+        return callStageTask(TickStage.BLOCK_ENTITY, callable);
+    }
+
+    public <T> T callChunkStage(Callable<T> callable) {
+        return callStageTask(TickStage.CHUNK, callable);
+    }
+
+    private <T> T callStageTask(TickStage stage, Callable<T> callable) {
+        if (isOnExecutorThread()) {
+            return executeStageCallable(stage, callable);
+        }
+        try {
+            return submitSequentialCallable(stage, callable).join();
+        } catch (CompletionException exception) {
+            Throwable cause = exception.getCause();
+            if (cause instanceof RuntimeException runtimeException) {
+                throw runtimeException;
+            }
+            if (cause instanceof Error error) {
+                throw error;
+            }
+            throw new RuntimeException(cause);
+        }
+    }
+
+    public boolean isOnExecutorThread() {
+        return CURRENT_REGION.get() == this;
     }
 
     public boolean contains(String worldId, int x, int z) {

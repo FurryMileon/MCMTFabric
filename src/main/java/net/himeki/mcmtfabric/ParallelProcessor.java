@@ -15,6 +15,7 @@ import net.minecraft.server.world.ServerChunkManager;
 import net.minecraft.server.world.ServerWorld;
 import net.minecraft.world.World;
 import net.minecraft.world.chunk.BlockEntityTickInvoker;
+import net.minecraft.util.math.ChunkPos;
 import net.minecraft.world.chunk.WorldChunk;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -65,6 +66,14 @@ public class ParallelProcessor {
 
     private static ThreadedChunksRegion findMatchingRegion(int chunkX, int chunkZ, ServerWorld world) {
         return PLAYER_REGION_MANAGER.findRegion(world, chunkX, chunkZ);
+    }
+
+    public static ThreadedChunksRegion findRegion(ServerWorld world, ChunkPos pos) {
+        return findMatchingRegion(pos.x, pos.z, world);
+    }
+
+    public static ThreadedChunksRegion findRegion(ServerWorld world, int chunkX, int chunkZ) {
+        return findMatchingRegion(chunkX, chunkZ, world);
     }
 
     public static void setupThreadPool(int parallelism) {
