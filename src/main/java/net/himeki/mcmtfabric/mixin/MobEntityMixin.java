@@ -1,6 +1,6 @@
 package net.himeki.mcmtfabric.mixin;
 
-import net.himeki.mcmtfabric.mixin.access.GoalSelectorAccess;
+import net.himeki.mcmtfabric.bridge.GoalSelectorBridge;
 import net.minecraft.entity.EntityType;
 import net.minecraft.entity.ai.goal.GoalSelector;
 import net.minecraft.entity.mob.MobEntity;
@@ -22,9 +22,9 @@ public abstract class MobEntityMixin {
 
     @Inject(method = "<init>", at = @At("TAIL"))
     private void mcmt$assignSelectorOwners(EntityType<? extends MobEntity> type, World world, CallbackInfo ci) {
-        GoalSelectorAccess goalAccess = (GoalSelectorAccess) this.goalSelector;
+        GoalSelectorBridge goalAccess = (GoalSelectorBridge) this.goalSelector;
         goalAccess.mcmt$setOwner((MobEntity) (Object) this);
-        GoalSelectorAccess targetAccess = (GoalSelectorAccess) this.targetSelector;
+        GoalSelectorBridge targetAccess = (GoalSelectorBridge) this.targetSelector;
         targetAccess.mcmt$setOwner((MobEntity) (Object) this);
     }
 }

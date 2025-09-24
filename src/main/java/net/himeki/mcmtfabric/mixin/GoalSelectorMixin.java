@@ -3,7 +3,7 @@ package net.himeki.mcmtfabric.mixin;
 import net.himeki.mcmtfabric.ParallelProcessor;
 import net.himeki.mcmtfabric.parallelised.ConcurrentCollections;
 import net.himeki.mcmtfabric.parallelised.threads.ThreadedChunksRegion;
-import net.himeki.mcmtfabric.mixin.access.GoalSelectorAccess;
+import net.himeki.mcmtfabric.bridge.GoalSelectorBridge;
 import net.minecraft.entity.ai.goal.GoalSelector;
 import net.minecraft.entity.ai.goal.PrioritizedGoal;
 import net.minecraft.entity.mob.MobEntity;
@@ -18,7 +18,7 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 import java.util.Set;
 
 @Mixin(GoalSelector.class)
-public abstract class GoalSelectorMixin implements GoalSelectorAccess {
+public abstract class GoalSelectorMixin implements GoalSelectorBridge {
     @Shadow
     private final Set<PrioritizedGoal> goals = ConcurrentCollections.newHashSet();
 

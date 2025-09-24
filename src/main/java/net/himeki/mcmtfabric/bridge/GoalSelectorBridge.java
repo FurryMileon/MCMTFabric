@@ -1,9 +1,8 @@
-package net.himeki.mcmtfabric.mixin.access;
+package net.himeki.mcmtfabric.bridge;
 
 import net.minecraft.entity.mob.MobEntity;
 
-public interface GoalSelectorAccess {
+public interface GoalSelectorBridge {
     MobEntity mcmt$getOwner();
-
     void mcmt$setOwner(MobEntity owner);
 }
