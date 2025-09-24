@@ -115,6 +115,7 @@ public class MCMT implements ModInitializer {
 
         // Listener reg begin
         ServerLifecycleEvents.SERVER_STARTED.register(server -> StatsCommand.resetAll());
+        ServerLifecycleEvents.SERVER_STOPPING.register(server -> ParallelProcessor.shutdown());
         CommandRegistrationCallback.EVENT.register((dispatcher, registryAccess, environment) -> ConfigCommand.register(dispatcher));
 
         LOGGER.info("MCMT Initialized");

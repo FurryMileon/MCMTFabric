@@ -159,6 +159,15 @@ public class PlayerRegionManager {
         return cache.get(pos, key -> lookupRegion(world, regions, chunkX, chunkZ));
     }
 
+    public synchronized void shutdownAll() {
+        for (PlayerRegion region : activeRegions.values()) {
+            region.shutdownExecutors();
+        }
+        activeRegions.clear();
+        chunkRegionCaches.clear();
+        regionsByWorld = Map.of();
+    }
+
     private static PlayerRegion lookupRegion(ServerWorld world, List<PlayerRegion> regions, int chunkX, int chunkZ) {
         String worldId = world.getRegistryKey().getValue().toString();
         for (PlayerRegion region : regions) {

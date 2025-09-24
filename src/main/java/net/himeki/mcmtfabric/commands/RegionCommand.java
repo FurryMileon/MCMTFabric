@@ -57,8 +57,8 @@ public class RegionCommand {
             double entityMs = nanosToMillis(timings.entityWorkNanos());
             double blockMs = nanosToMillis(timings.blockWorkNanos());
             double totalWorkMs = chunkMs + entityMs + blockMs;
-            double elapsedMs = nanosToMillis(timings.totalStageNanos());
-            double tps = totalWorkMs > 0.0 ? Math.min(1000.0 / totalWorkMs, 20.0) : 20.0;
+            double elapsedMs = nanosToMillis(timings.tickElapsedNanos());
+            double tps = elapsedMs > 0.0 ? Math.min(1000.0 / elapsedMs, 20.0) : 20.0;
 
             String message = String.format(Locale.ROOT,
                     "%s | work %.2fms (chunks %.2fms/%d, entities %.2fms/%d, block entities %.2fms/%d) | elapsed %.2fms | est TPS %.2f",
