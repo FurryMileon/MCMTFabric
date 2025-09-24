@@ -139,20 +139,39 @@ public class ThreadedChunksRegion implements ConfigData {
                 .start(command);
     }
 
-    private void submitSequential(TickStage stage, Runnable command) {
+    private CompletableFuture<Void> enqueueSequential(TickStage stage, Runnable command) {
         CompletableFuture<Void> next;
+        boolean runInline = false;
         synchronized (executorLock) {
             if (shutdown) {
-                runStageTask(stage, command);
-                return;
+                runInline = true;
+                next = null;
+            } else {
+                next = executorTail.handle((ignored, error) -> null)
+                        .thenRunAsync(() -> runStageTask(stage, command), virtualThreadExecutor());
+                executorTail = next.exceptionally(error -> {
+                    LOGGER.error("Exception while running task for region {}", name, error);
+                    return null;
+                });
             }
-            next = executorTail.handle((ignored, error) -> null)
-                    .thenRunAsync(() -> runStageTask(stage, command), virtualThreadExecutor());
-            executorTail = next.exceptionally(error -> {
-                LOGGER.error("Exception while running task for region {}", name, error);
-                return null;
-            });
         }
+        if (runInline) {
+            try {
+                runStageTask(stage, command);
+                return CompletableFuture.completedFuture(null);
+            } catch (RuntimeException | Error throwable) {
+                throw throwable;
+            } catch (Exception throwable) {
+                CompletableFuture<Void> failed = new CompletableFuture<>();
+                failed.completeExceptionally(throwable);
+                return failed;
+            }
+        }
+        return next;
+    }
+
+    private void submitSequential(TickStage stage, Runnable command) {
+        enqueueSequential(stage, command);
     }
 
     private void runStageTask(TickStage stage, Runnable command) {
@@ -298,11 +317,11 @@ public class ThreadedChunksRegion implements ConfigData {
     }
 
     public void beginTick() {
-        submitSequential(TickStage.TICK_START, this::markTickStart);
+        awaitStage(enqueueSequential(TickStage.TICK_START, this::markTickStart));
     }
 
     public void finishTick() {
-        submitSequential(TickStage.TICK_END, this::markTickEnd);
+        awaitStage(enqueueSequential(TickStage.TICK_END, this::markTickEnd));
     }
 
     private void markTickStart() {
@@ -340,6 +359,24 @@ public class ThreadedChunksRegion implements ConfigData {
             singleThreadExecutor = null;
             executorTail = CompletableFuture.completedFuture(null);
             return shutdownFuture;
+        }
+    }
+
+    private void awaitStage(CompletableFuture<Void> future) {
+        if (future == null) {
+            return;
+        }
+        try {
+            future.join();
+        } catch (CompletionException exception) {
+            Throwable cause = exception.getCause();
+            if (cause instanceof RuntimeException runtimeException) {
+                throw runtimeException;
+            }
+            if (cause instanceof Error error) {
+                throw error;
+            }
+            throw new RuntimeException(cause);
         }
     }
 
