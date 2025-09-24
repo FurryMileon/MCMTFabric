@@ -96,6 +96,7 @@ public class PlayerRegionManager {
         int size = areas.size();
         boolean[] visited = new boolean[size];
         List<PlayerRegion> regions = new ArrayList<>();
+        Set<PlayerRegion> claimedRegions = new HashSet<>();
 
         for (int i = 0; i < size; i++) {
             if (visited[i]) {
@@ -119,7 +120,7 @@ public class PlayerRegionManager {
             }
 
             String key = buildRegionKey(world, group);
-            PlayerRegion region = reuseRegion(world, group, previousByPlayer);
+            PlayerRegion region = reuseRegion(world, group, previousByPlayer, claimedRegions);
             if (region == null) {
                 region = new PlayerRegion(world, group);
             } else {
@@ -134,21 +135,27 @@ public class PlayerRegionManager {
     }
 
     private static PlayerRegion reuseRegion(ServerWorld world, List<PlayerArea> group,
-                                            Map<UUID, PlayerRegion> previousByPlayer) {
+                                            Map<UUID, PlayerRegion> previousByPlayer,
+                                            Set<PlayerRegion> claimedRegions) {
         PlayerRegion candidate = null;
+        String worldId = world.getRegistryKey().getValue().toString();
         for (PlayerArea area : group) {
-            PlayerRegion region = previousByPlayer.remove(area.player().getUuid());
-            if (region != null && region.getWorldId().equals(world.getRegistryKey().getValue().toString())) {
+            PlayerRegion region = previousByPlayer.get(area.player().getUuid());
+            if (region != null && region.getWorldId().equals(worldId) && claimedRegions.add(region)) {
                 candidate = region;
                 break;
             }
         }
         if (candidate == null) {
+            // These players will be assigned a brand new region, ensure their previous mapping is cleared.
+            for (PlayerArea area : group) {
+                previousByPlayer.remove(area.player().getUuid());
+            }
             return null;
         }
-        // Ensure no other player in the group reuses the same region later.
-        for (PlayerArea area : group) {
-            previousByPlayer.remove(area.player().getUuid());
+        // Remove every player that previously lived in this region so it cannot be reused by other groups.
+        for (UUID playerId : candidate.getPlayerIds()) {
+            previousByPlayer.remove(playerId);
         }
         return candidate;
     }
