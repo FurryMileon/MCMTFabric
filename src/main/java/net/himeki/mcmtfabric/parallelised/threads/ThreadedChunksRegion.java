@@ -317,11 +317,11 @@ public class ThreadedChunksRegion implements ConfigData {
     }
 
     public void beginTick() {
-        awaitStage(enqueueSequential(TickStage.TICK_START, this::markTickStart));
+        enqueueSequential(TickStage.TICK_START, this::markTickStart);
     }
 
     public void finishTick() {
-        awaitStage(enqueueSequential(TickStage.TICK_END, this::markTickEnd));
+        enqueueSequential(TickStage.TICK_END, this::markTickEnd);
     }
 
     private void markTickStart() {
@@ -359,24 +359,6 @@ public class ThreadedChunksRegion implements ConfigData {
             singleThreadExecutor = null;
             executorTail = CompletableFuture.completedFuture(null);
             return shutdownFuture;
-        }
-    }
-
-    private void awaitStage(CompletableFuture<Void> future) {
-        if (future == null) {
-            return;
-        }
-        try {
-            future.join();
-        } catch (CompletionException exception) {
-            Throwable cause = exception.getCause();
-            if (cause instanceof RuntimeException runtimeException) {
-                throw runtimeException;
-            }
-            if (cause instanceof Error error) {
-                throw error;
-            }
-            throw new RuntimeException(cause);
         }
     }
 
