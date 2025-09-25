@@ -318,6 +318,12 @@ public class ThreadedChunksRegion implements ConfigData {
         return CURRENT_REGION.get() == this;
     }
 
+    public boolean isShutdown() {
+        synchronized (executorLock) {
+            return shutdown;
+        }
+    }
+
     public boolean contains(String worldId, int x, int z) {
         return this.worldId.equals(worldId) && x >= x1 && x <= x2 && z >= z1 && z <= z2;
     }

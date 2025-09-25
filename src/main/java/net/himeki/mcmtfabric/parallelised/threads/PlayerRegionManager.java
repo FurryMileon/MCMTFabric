@@ -19,6 +19,7 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.function.Function;
+import java.util.stream.Collectors;
 
 /**
  * Maintains the dynamic mapping between players and threaded regions.
@@ -28,34 +29,46 @@ public class PlayerRegionManager {
     private final Map<String, PlayerRegion> activeRegions = new HashMap<>();
     private final Map<ServerWorld, RegionCache> chunkRegionCaches = new HashMap<>();
     private final List<CompletableFuture<Void>> pendingShutdowns = new ArrayList<>();
+    private final Map<ServerWorld, Map<PlayerRegion, CompletableFuture<Void>>> retiringRegions = new HashMap<>();
     private volatile Map<ServerWorld, List<PlayerRegion>> regionsByWorld = Map.of();
+    private volatile Map<ServerWorld, List<PlayerRegion>> lookupRegionsByWorld = Map.of();
 
     public synchronized void updateRegions(MinecraftServer server) {
         pendingShutdowns.removeIf(CompletableFuture::isDone);
         Map<String, PlayerRegion> nextActive = new HashMap<>();
         Map<ServerWorld, List<PlayerRegion>> nextRegionsByWorld = new HashMap<>();
+        Map<ServerWorld, List<PlayerRegion>> nextLookupByWorld = new HashMap<>();
         Set<ServerWorld> seenWorlds = new HashSet<>();
+        Map<String, ServerWorld> worldsById = new HashMap<>();
         Map<String, Map<UUID, PlayerRegion>> previousByWorld = buildPreviousPlayerIndex();
         Set<PlayerRegion> survivors = new HashSet<>();
 
         for (ServerWorld world : server.getWorlds()) {
             seenWorlds.add(world);
+            worldsById.put(world.getRegistryKey().getValue().toString(), world);
+            pruneRetiring(world);
             List<PlayerArea> areas = collectPlayerAreas(world);
-            if (areas.isEmpty()) {
-                RegionCache cache = chunkRegionCaches.get(world);
-                if (cache != null) {
-                    cache.invalidateAll();
-                }
-                continue;
-            }
-
             String worldId = world.getRegistryKey().getValue().toString();
             Map<UUID, PlayerRegion> previousByPlayer = previousByWorld.get(worldId);
             if (previousByPlayer == null) {
                 previousByPlayer = new HashMap<>();
             }
-            List<PlayerRegion> regions = buildRegionsForWorld(world, areas, nextActive, previousByPlayer, survivors);
-            nextRegionsByWorld.put(world, List.copyOf(regions));
+            List<PlayerRegion> regions = areas.isEmpty()
+                    ? List.of()
+                    : buildRegionsForWorld(world, areas, nextActive, previousByPlayer, survivors);
+            if (!regions.isEmpty()) {
+                nextRegionsByWorld.put(world, List.copyOf(regions));
+            }
+
+            List<PlayerRegion> lookupRegions = new ArrayList<>(regions);
+            Map<PlayerRegion, CompletableFuture<Void>> retiring = retiringRegions.get(world);
+            if (retiring != null && !retiring.isEmpty()) {
+                lookupRegions.addAll(retiring.keySet());
+            }
+            if (!lookupRegions.isEmpty()) {
+                nextLookupByWorld.put(world, List.copyOf(lookupRegions));
+            }
+
             chunkRegionCaches
                     .computeIfAbsent(world, key -> new RegionCache())
                     .invalidateAll();
@@ -64,7 +77,14 @@ public class PlayerRegionManager {
         // Shutdown regions that are no longer active
         for (PlayerRegion region : activeRegions.values()) {
             if (!survivors.contains(region)) {
-                pendingShutdowns.add(region.shutdownExecutors());
+                CompletableFuture<Void> shutdown = region.shutdownExecutors();
+                pendingShutdowns.add(shutdown);
+                ServerWorld world = worldsById.get(region.getWorldId());
+                if (world != null) {
+                    retiringRegions
+                            .computeIfAbsent(world, key -> new HashMap<>())
+                            .put(region, shutdown);
+                }
             }
         }
 
@@ -73,8 +93,27 @@ public class PlayerRegionManager {
 
         // Drop caches for worlds that disappeared
         chunkRegionCaches.keySet().removeIf(world -> !seenWorlds.contains(world));
+        retiringRegions.keySet().removeIf(world -> !seenWorlds.contains(world));
 
         regionsByWorld = Map.copyOf(nextRegionsByWorld);
+        lookupRegionsByWorld = Map.copyOf(nextLookupByWorld);
+    }
+
+    private void pruneRetiring(ServerWorld world) {
+        Map<PlayerRegion, CompletableFuture<Void>> retiring = retiringRegions.get(world);
+        if (retiring == null) {
+            return;
+        }
+        retiring.entrySet().removeIf(entry -> entry.getValue().isDone());
+        if (retiring.isEmpty()) {
+            retiringRegions.remove(world);
+        }
+    }
+
+    private void pruneAllRetiring() {
+        for (ServerWorld world : retiringRegions.keySet().stream().collect(Collectors.toList())) {
+            pruneRetiring(world);
+        }
     }
 
     private Map<String, Map<UUID, PlayerRegion>> buildPreviousPlayerIndex() {
@@ -194,6 +233,7 @@ public class PlayerRegionManager {
     public Collection<PlayerRegion> getPlayerRegions() {
         return regionsByWorld.values().stream()
                 .flatMap(Collection::stream)
+                .filter(region -> !region.isShutdown())
                 .toList();
     }
 
@@ -203,7 +243,7 @@ public class PlayerRegionManager {
     }
 
     public PlayerRegion findRegion(ServerWorld world, int chunkX, int chunkZ) {
-        List<PlayerRegion> regions = regionsByWorld.get(world);
+        List<PlayerRegion> regions = lookupRegionsByWorld.get(world);
         if (regions == null || regions.isEmpty()) {
             return null;
         }
@@ -218,10 +258,16 @@ public class PlayerRegionManager {
             toAwait.add(region.shutdownExecutors());
         }
         toAwait.addAll(pendingShutdowns);
+        pruneAllRetiring();
+        for (Map<PlayerRegion, CompletableFuture<Void>> futures : retiringRegions.values()) {
+            toAwait.addAll(futures.values());
+        }
         pendingShutdowns.clear();
         activeRegions.clear();
         chunkRegionCaches.clear();
+        retiringRegions.clear();
         regionsByWorld = Map.of();
+        lookupRegionsByWorld = Map.of();
         for (CompletableFuture<Void> future : toAwait) {
             future.join();
         }
