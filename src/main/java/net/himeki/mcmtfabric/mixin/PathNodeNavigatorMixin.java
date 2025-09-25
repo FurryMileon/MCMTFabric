@@ -7,7 +7,7 @@ import net.minecraft.entity.ai.pathing.PathNodeNavigator;
 import net.minecraft.entity.mob.MobEntity;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.world.chunk.ChunkCache;
-import org.jetbrains.annotations.Nullable;
+import net.himeki.mcmtfabric.util.annotations.Nullable;
 import org.spongepowered.asm.mixin.Mixin;
 
 import java.util.Set;

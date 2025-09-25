@@ -1,6 +1,6 @@
 package net.himeki.mcmtfabric.serdes.pools;
 
-import javax.annotation.Nullable;
+import net.himeki.mcmtfabric.util.annotations.Nullable;
 
 import net.himeki.mcmtfabric.parallelised.ChunkLock;
 
