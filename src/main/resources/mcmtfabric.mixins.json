@@ -18,6 +18,7 @@
     "FastUtilsMixin",
     "FoxEntityMixin",
     "GoalSelectorMixin",
+    "MobEntityMixin",
     "HoldTradeOffersTaskMixin",
     "ItemEntityMixin",
     "LevelPropagatorMixin",
