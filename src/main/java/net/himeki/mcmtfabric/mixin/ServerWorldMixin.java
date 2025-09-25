@@ -5,10 +5,13 @@ import it.unimi.dsi.fastutil.objects.ObjectLinkedOpenHashSet;
 import net.himeki.mcmtfabric.ParallelProcessor;
 import net.himeki.mcmtfabric.parallelised.ConcurrentCollections;
 import net.himeki.mcmtfabric.parallelised.ParaServerChunkProvider;
+import net.himeki.mcmtfabric.parallelised.threads.ThreadedChunksRegion;
 import net.minecraft.entity.Entity;
+import net.minecraft.entity.EntityType;
 import net.minecraft.entity.mob.MobEntity;
 import net.minecraft.server.WorldGenerationProgressListener;
 import net.minecraft.server.world.BlockEvent;
+import net.minecraft.server.world.ServerEntityManager;
 import net.minecraft.server.world.ServerChunkManager;
 import net.minecraft.server.world.ServerWorld;
 import net.minecraft.structure.StructureTemplateManager;
@@ -26,6 +29,7 @@ import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.Redirect;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
+import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
 import java.util.Collection;
 import java.util.List;
@@ -56,6 +60,14 @@ public abstract class ServerWorldMixin implements StructureWorldAccess {
     @Shadow
     @Final
     EntityList entityList;
+
+    @Shadow
+    @Final
+    private static org.slf4j.Logger LOGGER;
+
+    @Shadow
+    @Final
+    private ServerEntityManager<Entity> entityManager;
     ServerWorld thisWorld = (ServerWorld) (Object) this;
 
     @Redirect(method = "<init>", at = @At(value = "NEW", target = "(Lnet/minecraft/server/world/ServerWorld;Lnet/minecraft/world/level/storage/LevelStorage$Session;Lcom/mojang/datafixers/DataFixer;Lnet/minecraft/structure/StructureTemplateManager;Ljava/util/concurrent/Executor;Lnet/minecraft/world/gen/chunk/ChunkGenerator;IIZLnet/minecraft/server/WorldGenerationProgressListener;Lnet/minecraft/world/chunk/ChunkStatusChangeListener;Ljava/util/function/Supplier;)Lnet/minecraft/server/world/ServerChunkManager;"))
@@ -101,6 +113,25 @@ public abstract class ServerWorldMixin implements StructureWorldAccess {
     @Redirect(method = "processSyncedBlockEvents", at = @At(value = "INVOKE", target = "Lit/unimi/dsi/fastutil/objects/ObjectLinkedOpenHashSet;addAll(Ljava/util/Collection;)Z"))
     private boolean overwriteQueueAddAll(ObjectLinkedOpenHashSet<BlockEvent> instance, Collection<? extends BlockEvent> c) {
         return syncedBlockEventCLinkedQueue.addAll(c);
+    }
+
+    @Inject(method = "addEntity", at = @At("HEAD"), cancellable = true)
+    private void mcmt$enqueueEntityAdd(Entity entity, CallbackInfoReturnable<Boolean> cir) {
+        ThreadedChunksRegion region = ParallelProcessor.findRegion(thisWorld, entity.getChunkPos());
+        if (region == null) {
+            return;
+        }
+        boolean result = region.callEntityStage(() -> mcmt$addEntityInternal(entity));
+        cir.setReturnValue(result);
+        cir.cancel();
+    }
+
+    private boolean mcmt$addEntityInternal(Entity entity) {
+        if (entity.isRemoved()) {
+            LOGGER.warn("Tried to add entity {} but it was marked as removed already", EntityType.getId(entity.getType()));
+            return false;
+        }
+        return entityManager.addEntity(entity);
     }
 
     @Redirect(method = "updateListeners", at = @At(value = "FIELD", target = "Lnet/minecraft/server/world/ServerWorld;duringListenerUpdate:Z", opcode = Opcodes.PUTFIELD))

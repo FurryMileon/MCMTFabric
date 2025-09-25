@@ -2,8 +2,8 @@ package net.himeki.mcmtfabric.serdes.filter;
 
 import java.util.Set;
 
-import javax.annotation.Nonnull;
-import javax.annotation.Nullable;
+import net.himeki.mcmtfabric.util.annotations.Nonnull;
+import net.himeki.mcmtfabric.util.annotations.Nullable;
 
 import net.himeki.mcmtfabric.serdes.ISerDesHookType;
 

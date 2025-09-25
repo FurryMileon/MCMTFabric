@@ -8,7 +8,7 @@ import com.google.common.base.Predicates;
 import com.google.common.collect.Lists;
 import net.fabricmc.loader.api.FabricLoader;
 
-import javax.annotation.Nullable;
+import net.himeki.mcmtfabric.util.annotations.Nullable;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.util.*;
