@@ -7,18 +7,15 @@ import net.fabricmc.api.ModInitializer;
 import net.fabricmc.fabric.api.client.rendering.v1.EntityRendererRegistry;
 import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
-import net.fabricmc.fabric.api.networking.v1.ServerPlayConnectionEvents;
 import net.fabricmc.fabric.api.object.builder.v1.entity.FabricDefaultAttributeRegistry;
 import net.himeki.mcmtfabric.commands.ConfigCommand;
 import net.himeki.mcmtfabric.commands.StatsCommand;
 import net.himeki.mcmtfabric.config.GeneralConfig;
-import net.himeki.mcmtfabric.config.ThreadedRegionsConfig;
 import net.himeki.mcmtfabric.debug.MSPT10DebugBlock;
 import net.himeki.mcmtfabric.debug.MSPT10DebugBlockEntity;
 import net.himeki.mcmtfabric.debug.MSPT10DebugEntity;
 import net.himeki.mcmtfabric.debug.MSPT10DebugEntityRenderer;
 import net.himeki.mcmtfabric.jmx.JMXRegistration;
-import net.himeki.mcmtfabric.parallelised.BotRegionManager;
 import net.himeki.mcmtfabric.serdes.SerDesRegistry;
 import net.minecraft.block.AbstractBlock;
 import net.minecraft.block.entity.BlockEntityType;
@@ -33,11 +30,11 @@ import net.minecraft.util.Identifier;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
+import java.util.Objects;
+
 public class MCMT implements ModInitializer {
     public static final Logger LOGGER = LogManager.getLogger();
     public static GeneralConfig config;
-    public static ThreadedRegionsConfig threadedRegionsConfig;
-
     // Declare these as fields but don't initialize them immediately
     public static MSPT10DebugBlock MSPT10_DEBUG_BLOCK;
     public static BlockEntityType<MSPT10DebugBlockEntity> MSPT10_DEBUG_BLOCK_ENTITY;
@@ -106,11 +103,6 @@ public class MCMT implements ModInitializer {
         holder.load();  // Load again to run loadTELists() handler
         config = holder.getConfig();
 
-        ConfigHolder<ThreadedRegionsConfig> trHolder = AutoConfig.register(ThreadedRegionsConfig.class, Toml4jConfigSerializer::new);
-        trHolder.load();
-
-        trHolder.getConfig().threadedChunksRegions.forEach(ParallelProcessor::addThreadedChunksRegion);
-
         if (System.getProperty("jmt.mcmt.jmx") != null) {
             JMXRegistration.register();
         }
@@ -123,10 +115,8 @@ public class MCMT implements ModInitializer {
 
         // Listener reg begin
         ServerLifecycleEvents.SERVER_STARTED.register(server -> StatsCommand.resetAll());
+        ServerLifecycleEvents.SERVER_STOPPING.register(server -> ParallelProcessor.shutdown());
         CommandRegistrationCallback.EVENT.register((dispatcher, registryAccess, environment) -> ConfigCommand.register(dispatcher));
-
-        ServerPlayConnectionEvents.DISCONNECT.register((handler, server) ->
-                BotRegionManager.cleanup(handler.player.getName().toString()));
 
         LOGGER.info("MCMT Initialized");
     }
