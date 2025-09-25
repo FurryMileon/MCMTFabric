@@ -12,7 +12,6 @@ import net.fabricmc.fabric.api.object.builder.v1.entity.FabricDefaultAttributeRe
 import net.himeki.mcmtfabric.commands.ConfigCommand;
 import net.himeki.mcmtfabric.commands.StatsCommand;
 import net.himeki.mcmtfabric.config.GeneralConfig;
-import net.himeki.mcmtfabric.config.ThreadedRegionsConfig;
 import net.himeki.mcmtfabric.debug.MSPT10DebugBlock;
 import net.himeki.mcmtfabric.debug.MSPT10DebugBlockEntity;
 import net.himeki.mcmtfabric.debug.MSPT10DebugEntity;
@@ -33,10 +32,11 @@ import net.minecraft.util.Identifier;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
+import java.util.Objects;
+
 public class MCMT implements ModInitializer {
     public static final Logger LOGGER = LogManager.getLogger();
     public static GeneralConfig config;
-    public static ThreadedRegionsConfig threadedRegionsConfig;
 
     // Declare these as fields but don't initialize them immediately
     public static MSPT10DebugBlock MSPT10_DEBUG_BLOCK;
@@ -105,11 +105,6 @@ public class MCMT implements ModInitializer {
         });
         holder.load();  // Load again to run loadTELists() handler
         config = holder.getConfig();
-
-        ConfigHolder<ThreadedRegionsConfig> trHolder = AutoConfig.register(ThreadedRegionsConfig.class, Toml4jConfigSerializer::new);
-        trHolder.load();
-
-        trHolder.getConfig().threadedChunksRegions.forEach(ParallelProcessor::addThreadedChunksRegion);
 
         if (System.getProperty("jmt.mcmt.jmx") != null) {
             JMXRegistration.register();

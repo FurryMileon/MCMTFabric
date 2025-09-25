@@ -1,222 +1,101 @@
 package net.himeki.mcmtfabric.parallelised.threads;
 
+import net.himeki.mcmtfabric.MCMT;
 import java.util.Set;
-import java.util.concurrent.*;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.Executor;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.Phaser;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.atomic.AtomicBoolean;
 
-import me.shedaniel.autoconfig.ConfigData;
-import me.shedaniel.autoconfig.annotation.ConfigEntry;
-import net.himeki.mcmtfabric.MCMT;
-import org.apache.logging.log4j.LogManager;
-import org.apache.logging.log4j.Logger;
+/**
+ * Represents a single chunk that is processed on top of a dedicated virtual thread.
+ * Every chunk region runs tasks sequentially but in parallel with any other chunk.
+ */
+public class ThreadedChunksRegion {
 
-import static net.himeki.mcmtfabric.parallelised.threads.MCMTThreads.*;
+    private final String name;
+    private final String worldId;
+    private final int chunkX;
+    private final int chunkZ;
 
-public class ThreadedChunksRegion implements ConfigData {
-    private String name;
-    public int x1, z1, x2, z2;
-    public boolean multiThreadChunkTick = false;
-    public boolean multiThreadEntityTick = false;
-    public boolean multiThreadBlockEntityTick = false;
-    public String worldId;
+    private final DedicatedChunkExecutor chunkExecutor;
 
-    @ConfigEntry.Gui.Excluded
-    private transient Executor singleThreadExecutor;
+    private volatile Phaser chunkTickPhaser = new Phaser(1);
+    private volatile Phaser entityTickPhaser = new Phaser(1);
+    private volatile Phaser blockEntityTickPhaser = new Phaser(1);
 
-    @ConfigEntry.Gui.Excluded
-    private transient Executor serialExecutor;
+    public final Set<String> currentTasks = ConcurrentHashMap.newKeySet();
 
-    public void setAssignedCpuCore(int assignedCpuCore) {
-        this.assignedCpuCore = assignedCpuCore;
-    }
+    private final ConcurrentLinkedQueue<Long> chunkTickTimesCurrent = new ConcurrentLinkedQueue<>();
+    private final ConcurrentLinkedQueue<Long> chunkTickTimesLast = new ConcurrentLinkedQueue<>();
 
-    @ConfigEntry.Gui.Excluded
-    private transient int assignedCpuCore = -1;
+    private final ConcurrentLinkedQueue<Long> entityTickTimesCurrent = new ConcurrentLinkedQueue<>();
+    private final ConcurrentLinkedQueue<Long> entityTickTimesLast = new ConcurrentLinkedQueue<>();
 
-    @ConfigEntry.Gui.Excluded
-    private transient String source;
+    private final ConcurrentLinkedQueue<Long> blockEntityTickTimesCurrent = new ConcurrentLinkedQueue<>();
+    private final ConcurrentLinkedQueue<Long> blockEntityTickTimesLast = new ConcurrentLinkedQueue<>();
 
-    // Double buffers for execution times
-    @ConfigEntry.Gui.Excluded
-    private transient ConcurrentLinkedQueue<Long> chunkTickTimesCurrent = new ConcurrentLinkedQueue<>();
-    @ConfigEntry.Gui.Excluded
-    private transient ConcurrentLinkedQueue<Long> chunkTickTimesLast = new ConcurrentLinkedQueue<>();
+    private volatile long chunkStageStartTime = 0L;
+    private volatile long entityStageStartTime = 0L;
+    private volatile long blockEntityStageStartTime = 0L;
 
-    @ConfigEntry.Gui.Excluded
-    private transient ConcurrentLinkedQueue<Long> entityTickTimesCurrent = new ConcurrentLinkedQueue<>();
-    @ConfigEntry.Gui.Excluded
-    private transient ConcurrentLinkedQueue<Long> entityTickTimesLast = new ConcurrentLinkedQueue<>();
+    private volatile long currentChunkStageDuration = 0L;
+    private volatile long lastChunkStageDuration = 0L;
+    private volatile long currentEntityStageDuration = 0L;
+    private volatile long lastEntityStageDuration = 0L;
+    private volatile long currentBlockEntityStageDuration = 0L;
+    private volatile long lastBlockEntityStageDuration = 0L;
 
-    @ConfigEntry.Gui.Excluded
-    private transient ConcurrentLinkedQueue<Long> blockEntityTickTimesCurrent = new ConcurrentLinkedQueue<>();
-    @ConfigEntry.Gui.Excluded
-    private transient ConcurrentLinkedQueue<Long> blockEntityTickTimesLast = new ConcurrentLinkedQueue<>();
+    private final AtomicBoolean chunkStageStarted = new AtomicBoolean(false);
+    private final AtomicBoolean entityStageStarted = new AtomicBoolean(false);
+    private final AtomicBoolean blockEntityStageStarted = new AtomicBoolean(false);
 
-    @ConfigEntry.Gui.Excluded
-    private transient volatile long chunkStageStartTime = 0;
-    @ConfigEntry.Gui.Excluded
-    private transient volatile long entityStageStartTime = 0;
-    @ConfigEntry.Gui.Excluded
-    private transient volatile long blockEntityStageStartTime = 0;
+    private final AtomicBoolean chunkStageMeasured = new AtomicBoolean(false);
+    private final AtomicBoolean entityStageMeasured = new AtomicBoolean(false);
+    private final AtomicBoolean blockEntityStageMeasured = new AtomicBoolean(false);
 
-    @ConfigEntry.Gui.Excluded
-    private transient volatile long currentChunkStageDuration = 0;
-    @ConfigEntry.Gui.Excluded
-    private transient volatile long lastChunkStageDuration = 0;
-    @ConfigEntry.Gui.Excluded
-    private transient volatile long currentEntityStageDuration = 0;
-    @ConfigEntry.Gui.Excluded
-    private transient volatile long lastEntityStageDuration = 0;
-    @ConfigEntry.Gui.Excluded
-    private transient volatile long currentBlockEntityStageDuration = 0;
-    @ConfigEntry.Gui.Excluded
-    private transient volatile long lastBlockEntityStageDuration = 0;
-
-    @ConfigEntry.Gui.Excluded
-    private transient final AtomicBoolean chunkStageStarted = new AtomicBoolean(false);
-    @ConfigEntry.Gui.Excluded
-    private transient final AtomicBoolean entityStageStarted = new AtomicBoolean(false);
-    @ConfigEntry.Gui.Excluded
-    private transient final AtomicBoolean blockEntityStageStarted = new AtomicBoolean(false);
-
-    @ConfigEntry.Gui.Excluded
-    private transient final AtomicBoolean chunkStageMeasured = new AtomicBoolean(false);
-    @ConfigEntry.Gui.Excluded
-    private transient final AtomicBoolean entityStageMeasured = new AtomicBoolean(false);
-    @ConfigEntry.Gui.Excluded
-    private transient final AtomicBoolean blockEntityStageMeasured = new AtomicBoolean(false);
-
-
-    @ConfigEntry.Gui.Excluded
-    private transient Phaser chunkTickPhaser = new Phaser(1);
-
-    @ConfigEntry.Gui.Excluded
-    private transient Phaser entityTickPhaser = new Phaser(1);
-
-    @ConfigEntry.Gui.Excluded
-    private transient Phaser blockEntityTickPhaser = new Phaser(1);
-
-    @ConfigEntry.Gui.Excluded
-    public transient Set<String> currentTasks = ConcurrentHashMap.newKeySet();
-
-    @ConfigEntry.Gui.Excluded
-    private static final Logger LOGGER = LogManager.getLogger(ThreadedChunksRegion.class);
-
-
-    public ThreadedChunksRegion() {
-        // Default constructor required for serialization
-        this.source = "config"; // Default source
-    }
-
-    public ThreadedChunksRegion(String name, String worldId, int x1, int z1, int x2, int z2) {
-        this(name, worldId, x1, z1, x2, z2, "config");
-    }
-
-    public ThreadedChunksRegion(String name, String worldId, int x1, int z1, int x2, int z2, String source) {
+    private ThreadedChunksRegion(String name, String worldId, int chunkX, int chunkZ) {
         this.name = name;
         this.worldId = worldId;
-        this.x1 = Math.min(x1, x2);
-        this.z1 = Math.min(z1, z2);
-        this.x2 = Math.max(x1, x2);
-        this.z2 = Math.max(z1, z2);
-        this.source = source;
+        this.chunkX = chunkX;
+        this.chunkZ = chunkZ;
+        this.chunkExecutor = new DedicatedChunkExecutor("Region-" + name + "-worker");
     }
 
-    public void initializePhaser() {
-        // Initialize phaser with 1 party (the main thread)
-        this.chunkTickPhaser = new Phaser(1);
-        this.entityTickPhaser = new Phaser(1);
-        this.blockEntityTickPhaser = new Phaser(1);
+    public static ThreadedChunksRegion forChunk(String worldId, int chunkX, int chunkZ) {
+        String regionName = "chunk_" + chunkX + "_" + chunkZ;
+        return new ThreadedChunksRegion(regionName, worldId, chunkX, chunkZ);
     }
 
+    public synchronized void initializePhaser() {
+        chunkTickPhaser = new Phaser(1);
+        entityTickPhaser = new Phaser(1);
+        blockEntityTickPhaser = new Phaser(1);
+    }
 
     public Executor getSingleThreadExecutor() {
-        if (singleThreadExecutor == null) {
-            String poolType = System.getProperty("MCMT_SINGLE_POOL_TYPE", "platform").toLowerCase();
-            switch (poolType) {
-                case "virtual":
-                    singleThreadExecutor = Executors.newSingleThreadExecutor(createNamedVirtualThreadFactory("Region-" + name + "-VirtualThread-"));
-                    break;
-                case "platform":
-                    singleThreadExecutor = Executors.newSingleThreadExecutor(createNamedPlatformThreadFactory("Region-" + name + "-PlatformThread-"));
-                    break;
-                case "affinity":
-//                    singleThreadExecutor = Executors.newSingleThreadExecutor(createNamedPlatformAffinityThreadFactoryForRegion(this));
-                    singleThreadExecutor = getAffinitySerialExecutor();
-                    break;
-                default:
-                    MCMT.LOGGER.warn("Invalid MCMT_SINGLE_POOL_TYPE: {}. Using default 'platform'.", poolType);
-                    singleThreadExecutor = Executors.newSingleThreadExecutor(createNamedPlatformThreadFactory("Region-" + name + "-PlatformThread-"));
-            }
-        }
-        return singleThreadExecutor;
-    }
-
-    public Executor getAffinitySerialExecutor() {
-        if (serialExecutor == null) {
-            serialExecutor = new SerialExecutor(GlobalAffinityThreadPool.getAffinityWorldAndRegionPool());
-        }
-        return serialExecutor;
-    }
-
-    public boolean contains(String worldId, int x, int z) {
-        return this.worldId.equals(worldId) && x >= x1 && x <= x2 && z >= z1 && z <= z2;
+        return chunkExecutor;
     }
 
     public Executor getChunkTickExecutor() {
-        return multiThreadChunkTick ?
-                GlobalAffinityThreadPool.getAffinitySharedPool() :
-                getSingleThreadExecutor();
+        return chunkExecutor;
     }
 
     public Executor getEntityTickExecutor() {
-        return multiThreadEntityTick ?
-                GlobalAffinityThreadPool.getAffinitySharedPool() :
-                getSingleThreadExecutor();
+        return chunkExecutor;
     }
 
     public Executor getBlockEntityTickExecutor() {
-        return multiThreadBlockEntityTick ?
-                GlobalAffinityThreadPool.getAffinitySharedPool() :
-                getSingleThreadExecutor();
-    }
-
-    public boolean isMultiThreadChunkTick() {
-        return multiThreadChunkTick;
-    }
-
-    public void setMultiThreadChunkTick(boolean value) {
-        this.multiThreadChunkTick = value;
-    }
-
-    public boolean isMultiThreadEntityTick() {
-        return multiThreadEntityTick;
-    }
-
-    public void setMultiThreadEntityTick(boolean value) {
-        this.multiThreadEntityTick = value;
-    }
-
-    public boolean isMultiThreadBlockEntityTick() {
-        return multiThreadBlockEntityTick;
-    }
-
-    public void setMultiThreadBlockEntityTick(boolean value) {
-        this.multiThreadBlockEntityTick = value;
+        return chunkExecutor;
     }
 
     public void shutdownExecutors() {
-        if (singleThreadExecutor != null) {
-            if (assignedCpuCore != -1) {
-                LOGGER.debug("Region {} releasing core {}", name, assignedCpuCore);
-                CPUCoreManager.releaseCore(assignedCpuCore, "REGION");
-                assignedCpuCore = -1;
-            }
-            singleThreadExecutor = null;
-        }
+        chunkExecutor.close();
     }
 
-    // Getters remain the same
     public String getName() {
         return name;
     }
@@ -226,56 +105,39 @@ public class ThreadedChunksRegion implements ConfigData {
     }
 
     public int getX1() {
-        return x1;
+        return chunkX;
     }
 
     public int getZ1() {
-        return z1;
+        return chunkZ;
     }
 
     public int getX2() {
-        return x2;
+        return chunkX;
     }
 
     public int getZ2() {
-        return z2;
+        return chunkZ;
     }
 
-    public String getSource() {
-        return source != null ? source : "config"; // Fallback to "config" if null
-    }
-
-    public void setSource(String source) {
-        this.source = source;
-    }
-
-    public void postChunkTick() {
-        // Wait for chunk tick phaser
-        chunkTickPhaser.arriveAndAwaitAdvance();
-        recordChunkStageEnd(); // Record stop time for chunk stage
-    }
-
-    public void postEntityTick() {
-        // Ensure chunk stage has completed
-        chunkTickPhaser.awaitAdvance(0);
-        // Wait for entity tick phaser
-        entityTickPhaser.arriveAndAwaitAdvance();
-        recordEntityStageEnd(); // Record stop time for entity stage
-    }
-
-    public void postBlockEntityTick() {
-        // Ensure entity stage has completed
-        entityTickPhaser.awaitAdvance(0);
-        // Wait for block entity tick phaser
-        blockEntityTickPhaser.arriveAndAwaitAdvance();
-        recordBlockEntityStageEnd(); // Record stop time for block entity stage
+    public boolean contains(String worldId, int x, int z) {
+        return this.worldId.equals(worldId) && this.chunkX == x && this.chunkZ == z;
     }
 
     public long getArea() {
-        // Calculate area of the region in chunks
-        long width = Math.abs((long) x2 - x1) + 1;
-        long height = Math.abs((long) z2 - z1) + 1;
-        return width * height;
+        return 1;
+    }
+
+    public Phaser getChunkTickPhaser() {
+        return chunkTickPhaser;
+    }
+
+    public Phaser getEntityTickPhaser() {
+        return entityTickPhaser;
+    }
+
+    public Phaser getBlockEntityTickPhaser() {
+        return blockEntityTickPhaser;
     }
 
     public ConcurrentLinkedQueue<Long> getChunkTickTimesLast() {
@@ -290,7 +152,18 @@ public class ThreadedChunksRegion implements ConfigData {
         return blockEntityTickTimesLast;
     }
 
-    // Methods to record execution times to the current buffer
+    public long getLastChunkStageDuration() {
+        return lastChunkStageDuration;
+    }
+
+    public long getLastEntityStageDuration() {
+        return lastEntityStageDuration;
+    }
+
+    public long getLastBlockEntityStageDuration() {
+        return lastBlockEntityStageDuration;
+    }
+
     public void addChunkTickTime(long duration) {
         chunkTickTimesCurrent.add(duration);
     }
@@ -339,43 +212,23 @@ public class ThreadedChunksRegion implements ConfigData {
         }
     }
 
-    public long getLastChunkStageDuration() {
-        return lastChunkStageDuration;
-    }
-
-    public long getLastEntityStageDuration() {
-        return lastEntityStageDuration;
-    }
-
-    public long getLastBlockEntityStageDuration() {
-        return lastBlockEntityStageDuration;
-    }
-
-
-    // Method to swap buffers at the end of the tick
     public void swapExecutionTimeBuffers() {
-        // Swap individual tick times (existing logic)
-        ConcurrentLinkedQueue<Long> tempChunk = chunkTickTimesLast;
-        chunkTickTimesLast = chunkTickTimesCurrent;
-        chunkTickTimesCurrent = tempChunk;
+        chunkTickTimesLast.clear();
+        chunkTickTimesLast.addAll(chunkTickTimesCurrent);
         chunkTickTimesCurrent.clear();
 
-        ConcurrentLinkedQueue<Long> tempEntity = entityTickTimesLast;
-        entityTickTimesLast = entityTickTimesCurrent;
-        entityTickTimesCurrent = tempEntity;
+        entityTickTimesLast.clear();
+        entityTickTimesLast.addAll(entityTickTimesCurrent);
         entityTickTimesCurrent.clear();
 
-        ConcurrentLinkedQueue<Long> tempBlockEntity = blockEntityTickTimesLast;
-        blockEntityTickTimesLast = blockEntityTickTimesCurrent;
-        blockEntityTickTimesCurrent = tempBlockEntity;
+        blockEntityTickTimesLast.clear();
+        blockEntityTickTimesLast.addAll(blockEntityTickTimesCurrent);
         blockEntityTickTimesCurrent.clear();
 
-        // Swap stage durations
         lastChunkStageDuration = currentChunkStageDuration;
         lastEntityStageDuration = currentEntityStageDuration;
         lastBlockEntityStageDuration = currentBlockEntityStageDuration;
 
-        // Reset measurement flags
         chunkStageStarted.set(false);
         entityStageStarted.set(false);
         blockEntityStageStarted.set(false);
@@ -384,15 +237,69 @@ public class ThreadedChunksRegion implements ConfigData {
         blockEntityStageMeasured.set(false);
     }
 
-    public Phaser getChunkTickPhaser() {
-        return chunkTickPhaser;
+    public void postChunkTick() {
+        chunkTickPhaser.arriveAndAwaitAdvance();
+        recordChunkStageEnd();
     }
 
-    public Phaser getEntityTickPhaser() {
-        return entityTickPhaser;
+    public void postEntityTick() {
+        chunkTickPhaser.awaitAdvance(0);
+        entityTickPhaser.arriveAndAwaitAdvance();
+        recordEntityStageEnd();
     }
 
-    public Phaser getBlockEntityTickPhaser() {
-        return blockEntityTickPhaser;
+    public void postBlockEntityTick() {
+        entityTickPhaser.awaitAdvance(0);
+        blockEntityTickPhaser.arriveAndAwaitAdvance();
+        recordBlockEntityStageEnd();
+    }
+
+    private static final class DedicatedChunkExecutor implements Executor, AutoCloseable {
+        private final LinkedBlockingQueue<Runnable> queue = new LinkedBlockingQueue<>();
+        private final AtomicBoolean running = new AtomicBoolean(true);
+        private final Thread worker;
+        private static final Runnable POISON = () -> {};
+
+        private DedicatedChunkExecutor(String name) {
+            this.worker = Thread.ofVirtual()
+                    .name(name)
+                    .start(() -> {
+                        try {
+                            while (running.get()) {
+                                Runnable task = queue.take();
+                                if (task == POISON) {
+                                    break;
+                                }
+                                try {
+                                    task.run();
+                                } catch (Throwable throwable) {
+                                    MCMT.LOGGER.error("Error while executing chunk task", throwable);
+                                }
+                            }
+                        } catch (InterruptedException e) {
+                            Thread.currentThread().interrupt();
+                        }
+                    });
+        }
+
+        @Override
+        public void execute(Runnable command) {
+            if (!running.get()) {
+                throw new RejectedExecutionException("Chunk executor is shutting down");
+            }
+            queue.offer(command);
+        }
+
+        @Override
+        public void close() {
+            if (running.compareAndSet(true, false)) {
+                queue.offer(POISON);
+                try {
+                    worker.join();
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+            }
+        }
     }
 }

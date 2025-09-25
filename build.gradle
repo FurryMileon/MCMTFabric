@@ -43,12 +43,6 @@ dependencies {
     modImplementation 'com.electronwill.night-config:toml:3.8.1'
     include group: 'com.electronwill.night-config', name: 'toml', version: '3.8.1'
     include group: 'com.electronwill.night-config', name: 'core', version: '3.8.1'
-
-    modImplementation("com.github.ben-manes.caffeine:caffeine:3.1.8")
-    include("com.github.ben-manes.caffeine:caffeine:3.1.8")
-
-    modImplementation("net.openhft:affinity:3.23.3")
-    include("net.openhft:affinity:3.23.3")
 }
 
 processResources {
